@@ -1,15 +1,17 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef } from 'react';
+import {
+  Ionicons } from '@expo/vector-icons';
+import { useEffect,
+  useRef } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { Text } from "../i18n";
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BookCover } from '../components/BookCover';

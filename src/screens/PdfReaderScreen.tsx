@@ -1,17 +1,20 @@
-import { Ionicons } from "@expo/vector-icons";
+import {
+  Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system/legacy";
 import {
   activateKeepAwakeAsync,
   deactivateKeepAwake,
-} from "expo-keep-awake";
-import { useEffect, useMemo, useState } from "react";
+  } from "expo-keep-awake";
+import { useEffect,
+  useMemo,
+  useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
+import { Text } from "../i18n";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 

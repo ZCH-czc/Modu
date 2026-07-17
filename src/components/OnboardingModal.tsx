@@ -1,15 +1,19 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { useEffect,
+  useMemo,
+  useRef,
+  useState } from "react";
 import {
   Animated,
   Easing,
   Modal,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from "react-native";
+import { Text } from "../i18n";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type Props = {

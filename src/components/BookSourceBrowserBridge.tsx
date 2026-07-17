@@ -1,13 +1,18 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState } from "react";
 import {
   ActivityIndicator,
   Modal,
   Pressable,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
+import { Text } from "../i18n";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import {

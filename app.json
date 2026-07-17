@@ -2,7 +2,7 @@
   "expo": {
     "name": "墨读",
     "slug": "modu-reader-v3",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,

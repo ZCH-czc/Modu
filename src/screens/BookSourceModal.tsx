@@ -1,5 +1,8 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { useEffect,
+  useMemo,
+  useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -9,10 +12,9 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from "react-native";
+import { Text, TextInput, useI18n } from "../i18n";
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -67,6 +69,7 @@ export function BookSourceModal({
   onRead,
 }: Props) {
   const Alert = useAppAlert();
+  const { t } = useI18n();
   const [importValue, setImportValue] = useState("");
   const [keyword, setKeyword] = useState("");
   const [activeSourceId, setActiveSourceId] = useState<string>(ALL_SOURCES_ID);
@@ -446,7 +449,7 @@ export function BookSourceModal({
                         style={styles.resultCaption}
                       >
                         {searchProgress
-                          ? "正在搜索 " + searchProgress.completed + " / " + searchProgress.total
+                          ? t("正在搜索 {completed} / {total}", { completed: searchProgress.completed, total: searchProgress.total })
                           : "正在搜索…"}
                       </Animated.Text>
                     ) : results.length ? (
@@ -454,14 +457,14 @@ export function BookSourceModal({
                         entering={FadeInDown.duration(180)}
                         style={styles.resultCaption}
                       >
-                        找到 {results.length} 本书
+                        {t("找到 {count} 本书", { count: results.length })}
                       </Animated.Text>
                     ) : hasSearched ? (
                       <Animated.Text
                         entering={FadeIn.duration(180)}
                         style={styles.resultCaption}
                       >
-                        没有匹配结果，可以换个关键词
+                        {t("没有匹配结果，可以换个关键词")}
                       </Animated.Text>
                     ) : (
                       <Text style={styles.resultCaption}>搜索结果会显示在下方</Text>

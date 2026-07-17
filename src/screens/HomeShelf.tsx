@@ -1,7 +1,16 @@
-import { Ionicons } from "@expo/vector-icons";
+import {
+  Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { memo, useCallback, useMemo } from "react";
-import { FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { memo,
+  useCallback,
+  useMemo } from "react";
+import { FlatList,
+  Pressable,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from "react-native";
+import { Text } from "../i18n";
 import type { DimensionValue } from "react-native";
 
 import type { Book } from "../types";

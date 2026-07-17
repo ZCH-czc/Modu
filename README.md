@@ -73,7 +73,7 @@ pnpm start -- --dev-client
 The repository includes a version-aware build script:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -Version 1.5.0 -VersionCode 4
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -Version 1.5.1 -VersionCode 5
 ```
 
 The APK is written to `dist/android`.

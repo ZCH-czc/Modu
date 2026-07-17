@@ -1,13 +1,16 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { useEffect,
+  useRef,
+  useState } from "react";
 import {
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
+import { Text, useI18n, type LanguagePreference } from "../i18n";
 import Animated, {
   Easing,
   LinearTransition,
@@ -53,6 +56,7 @@ const themes: Array<{ key: ReaderTheme; label: string; color: string }> = [
 
 export function SettingsScreen(props: Props) {
   const Alert = useAppAlert();
+  const { language, setLanguage } = useI18n();
   const [libraryVisible, setLibraryVisible] = useState(false);
   const [aboutVisible, setAboutVisible] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -100,6 +104,19 @@ export function SettingsScreen(props: Props) {
             <Text style={styles.profileName}>静心阅读者</Text>
           </View>
         </View>
+
+        <Section title="语言与地区">
+          <SegmentRow<LanguagePreference>
+            title="应用语言"
+            value={language}
+            options={[
+              ["system", "跟随系统"],
+              ["zh-CN", "简体中文"],
+              ["en", "英语"],
+            ]}
+            onChange={(value) => void setLanguage(value)}
+          />
+        </Section>
 
         <Section title="阅读外观">
           <Text style={styles.label}>阅读主题</Text>
@@ -312,7 +329,7 @@ export function SettingsScreen(props: Props) {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.0"
+            value="v1.5.1"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -364,6 +381,7 @@ function ThemeOption({
   active: boolean;
   onPress: () => void;
 }) {
+  const { t } = useI18n();
   const progress = useSharedValue(active ? 1 : 0);
   useEffect(() => {
     progress.value = withSpring(active ? 1 : 0, { damping: 17, stiffness: 250, mass: 0.55 });
@@ -385,7 +403,7 @@ function ThemeOption({
           {active ? <Ionicons name="checkmark" size={17} color={theme.key === "night" ? "#FFF" : "#315D4B"} /> : null}
         </View>
       </Animated.View>
-      <Animated.Text style={[styles.themeLabel, labelStyle]}>{theme.label}</Animated.Text>
+      <Animated.Text style={[styles.themeLabel, labelStyle]}>{t(theme.label)}</Animated.Text>
     </Pressable>
   );
 }
@@ -645,7 +663,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
       <View style={styles.aboutBackdrop}>
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.0</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.1</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>

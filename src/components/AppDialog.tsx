@@ -1,6 +1,17 @@
-import { Ionicons } from "@expo/vector-icons";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { Keyboard, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState } from "react";
+import { Keyboard,
+  Modal,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
+import { Text } from "../i18n";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 export type AppAlertButton = {

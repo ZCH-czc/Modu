@@ -8,6 +8,7 @@ import { Platform } from "react-native";
 import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
 
+import { translate } from "../i18n";
 import type {
   Book,
   ReaderOrientation,
@@ -119,8 +120,8 @@ export async function configureReminder(
 
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync(REMINDER_CHANNEL, {
-        name: "每日阅读提醒",
-        description: "提醒你每天留一点时间继续阅读",
+        name: translate("每日阅读提醒"),
+        description: translate("提醒你每天留一点时间继续阅读"),
         importance: Notifications.AndroidImportance.DEFAULT,
       });
     }
@@ -137,8 +138,8 @@ export async function configureReminder(
 
     const identifier = await Notifications.scheduleNotificationAsync({
       content: {
-        title: "今天也读一会儿",
-        body: "打开墨读，继续上次停下的那一页。",
+        title: translate("今天也读一会儿"),
+        body: translate("打开墨读，继续上次停下的那一页。"),
         sound: "default",
       },
       trigger: {

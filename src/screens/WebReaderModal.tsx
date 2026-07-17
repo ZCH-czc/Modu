@@ -1,5 +1,10 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Ionicons } from "@expo/vector-icons";
+import { useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState } from "react";
 import {
   ActivityIndicator,
   Animated as RNAnimated,
@@ -10,11 +15,10 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
+import { Text, TextInput } from "../i18n";
 import Animated, { FadeIn, FadeOut, SlideInDown } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {

@@ -1,5 +1,9 @@
-import { LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet, Text, View } from 'react-native';
+import {
+  LinearGradient } from 'expo-linear-gradient';
+import { StyleSheet,
+  View,
+} from 'react-native';
+import { Text } from "../i18n";
 
 import { Book } from '../types';
 

@@ -1,6 +1,12 @@
-import { Ionicons } from "@expo/vector-icons";
+import {
+  Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -8,10 +14,10 @@ import {
   Easing,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from "react-native";
+import { I18nProvider, Text } from "./src/i18n";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, {
   Easing as ReanimatedEasing,
@@ -100,9 +106,11 @@ function useEvent<T extends (...args: any[]) => any>(handler: T): T {
 
 export default function App() {
   return (
-    <AppDialogProvider>
-      <AppContent />
-    </AppDialogProvider>
+    <I18nProvider>
+      <AppDialogProvider>
+        <AppContent />
+      </AppDialogProvider>
+    </I18nProvider>
   );
 }
 
