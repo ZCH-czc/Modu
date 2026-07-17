@@ -1,0 +1,13 @@
+minimumReleaseAgeExclude:
+  - '@expo/cli@54.0.26'
+  - '@expo/config-plugins@54.0.5'
+  - '@expo/config@12.0.14'
+  - '@expo/env@2.0.12'
+  - '@expo/metro-config@54.0.17'
+  - '@expo/prebuild-config@54.0.9'
+  - '@expo/schema-utils@0.1.9'
+  - babel-preset-expo@54.0.12
+  - expo@54.0.36
+virtualStoreDir: ../v
+virtualStoreDirMaxLength: 20
+nodeLinker: hoisted

@@ -1,0 +1,24 @@
+appId: com.modureader.desktop
+productName: 墨读
+electronVersion: 43.1.1
+directories:
+  output: ../dist-windows
+files:
+  - main.cjs
+  - package.json
+  - dist-web/**/*
+asar: true
+npmRebuild: false
+compression: maximum
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Modu-Reader-Windows-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 墨读

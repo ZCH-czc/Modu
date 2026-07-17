@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Expo and Metro
+.expo/
+.expo-export*/
+*.log
+
+# Environment and local credentials
+.env
+.env.*
+!.env.example
+android/app/*.keystore
+android/app/*.jks
+android/app/*.p12
+
+# Android local/build output
+android/local.properties
+android/.gradle/
+android/**/build/
+android/**/.cxx/
+*.hprof
+*.iml
+
+# Generated distributions and test artifacts
+dist/
+dist-*/
+desktop/dist-web/
+artifacts/
+coverage/
+
+# IDE and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

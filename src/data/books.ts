@@ -1,0 +1,65 @@
+import { Book } from '../types';
+
+const pages = [
+  '雨从凌晨开始下，到清晨时已经变得很轻。窗沿上积着一层薄薄的水，远处屋顶的颜色被洗得柔和，像一幅还没有完全干透的画。\n\n我把书摊开放在桌上，却迟迟没有翻页。那些句子安静地停在那里，仿佛知道一个人真正需要的并不是答案，而是一段可以慢下来的时间。',
+  '后来我才明白，阅读并不总是为了抵达某处。更多时候，它像是在一条陌生的小路上散步。你不知道转角会遇见什么，但风、树影和偶然响起的鸟鸣，都在悄悄改变你看待世界的方式。\n\n有些书读完便放下，有些书却会在多年以后重新找到你。',
+  '午后的光线移过书页，纸张泛起温暖的颜色。我在一行字旁停下来，想起很久以前的某个夏天。记忆没有声音，却带着清晰的温度。\n\n我们以为自己在读别人的故事，其实常常是在故事里辨认自己。',
+  '夜色落下来，城市的灯一盏盏亮起。合上书时，房间比开始阅读前更安静了一些。\n\n好的文字不会替你做决定。它只是把一扇窗推开，让你看见原来还有另一种光。',
+];
+
+export const sampleBooks: Book[] = [
+  {
+    id: 'silent-season',
+    title: '寂静的季节',
+    author: '林岚',
+    category: '文学',
+    progress: 0.5,
+    currentChapter: '第十二章 · 雨停之前',
+    lastRead: '刚刚',
+    coverColors: ['#1D312A', '#4B6B56', '#C19B63'],
+    accent: '#D5B77D',
+    darkCover: true,
+    pages,
+    format: 'sample',
+  },
+  {
+    id: 'mountains',
+    title: '山茶文具店',
+    author: '小川糸',
+    category: '治愈',
+    progress: 0.25,
+    currentChapter: '夏 · 第二封信',
+    lastRead: '昨天',
+    coverColors: ['#E8D6C3', '#C98F7C', '#F5ECE1'],
+    accent: '#925C4A',
+    pages,
+    format: 'sample',
+  },
+  {
+    id: 'night-train',
+    title: '夜航西飞',
+    author: '柏瑞尔·马卡姆',
+    category: '传记',
+    progress: 0.75,
+    currentChapter: '向北飞行',
+    lastRead: '周二',
+    coverColors: ['#142236', '#405D76', '#D1A866'],
+    accent: '#E4C188',
+    darkCover: true,
+    pages,
+    format: 'sample',
+  },
+  {
+    id: 'human-world',
+    title: '人间草木',
+    author: '汪曾祺',
+    category: '散文',
+    progress: 0,
+    currentChapter: '葡萄月令',
+    lastRead: '7 月 12 日',
+    coverColors: ['#D5DCC8', '#71836A', '#F2EADB'],
+    accent: '#52644D',
+    pages,
+    format: 'sample',
+  }
+];
