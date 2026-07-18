@@ -31,6 +31,7 @@ export function createWebCaptureBook(extraction: WebPageExtraction): Book {
     pageTitles,
     format: "webclip",
     sourceUrl: stableUrl,
+    tocUrl: extraction.tocUrl,
     webChapters: chapters,
     webNextUrl: extraction.nextUrl,
     webCurrentChapterIndex: currentIndex,
@@ -52,6 +53,7 @@ export function createWebCaptureExtraction(book: Book): WebPageExtraction | unde
     content: current.content,
     url: current.url,
     nextUrl: book.webNextUrl,
+    tocUrl: book.tocUrl,
     chapters,
   };
 }

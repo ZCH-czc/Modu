@@ -1,6 +1,11 @@
 export const enReader: Record<string, string> = {
   "目录": "Chapters",
   "章节目录": "Table of Contents",
+  "回到原网页": "Back to Original Page",
+  "在原网页查找更多章节": "Find More Chapters on the Web",
+  "回到网页目录，继续发现并保存后续章节": "Return to the website to find and save more chapters",
+  "原网页不可用": "Original Page Unavailable",
+  "这本网页书没有保存原始网址。": "No original web address was saved for this book.",
   "上一章": "Previous",
   "下一章": "Next",
   "上一页": "Previous Page",

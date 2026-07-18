@@ -32,6 +32,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import type { Book, ReaderPreferences, ReaderTheme } from "../types";
+import { getReaderFontFamily } from "../utils/readerFonts";
 
 type ReaderScreenProps = {
   book: Book;
@@ -44,6 +45,7 @@ type ReaderScreenProps = {
   canPreviousChapter?: boolean;
   canNextChapter?: boolean;
   onDownloadAll?: () => void;
+  onOpenOriginal?: (url?: string) => void;
   downloadProgress?: { completed: number; total: number };
 };
 
@@ -52,6 +54,7 @@ type ChapterEntry = {
   title: string;
   pageIndex: number;
   onlineIndex?: number;
+  url?: string;
 };
 
 type ReaderPageRuntimeState = {
@@ -106,6 +109,7 @@ export function ReaderScreen({
   canPreviousChapter = false,
   canNextChapter = false,
   onDownloadAll,
+  onOpenOriginal,
   downloadProgress,
 }: ReaderScreenProps) {
   const [pageIndex, setPageIndex] = useState(() =>
@@ -155,6 +159,23 @@ export function ReaderScreen({
         onlineIndex: index,
       }));
     }
+    if (book.format === "webclip" && book.webChapters?.length) {
+      const titles = book.pageTitles ?? [];
+      let searchFrom = 0;
+      return book.webChapters.map((chapter, index) => {
+        let chapterPage = titles.findIndex(
+          (title, page) => page >= searchFrom && title?.trim() === chapter.title?.trim(),
+        );
+        if (chapterPage < 0) chapterPage = Math.min(searchFrom, Math.max(book.pages.length - 1, 0));
+        searchFrom = chapterPage + 1;
+        return {
+          key: chapter.url + "-" + index,
+          title: chapter.title || `第 ${index + 1} 章`,
+          pageIndex: chapterPage,
+          url: chapter.url,
+        };
+      });
+    }
     const titles = book.pageTitles ?? [];
     if (!titles.length) {
       return [{ key: "body", title: "正文", pageIndex: 0 }];
@@ -169,7 +190,7 @@ export function ReaderScreen({
       previousTitle = title;
     }
     return entries.length ? entries : [{ key: "body", title: "正文", pageIndex: 0 }];
-  }, [book.onlineChapters, book.pageTitles, book.pages.length]);
+  }, [book.format, book.onlineChapters, book.pageTitles, book.pages.length, book.webChapters]);
 
   const currentChapterListIndex = useMemo(() => {
     if (book.onlineChapters?.length) {
@@ -183,6 +204,8 @@ export function ReaderScreen({
     });
     return current;
   }, [book.onlineChapterIndex, book.onlineChapters, chapterEntries, pageIndex]);
+
+  const currentOriginalUrl = chapterEntries[currentChapterListIndex]?.url || book.sourceUrl;
 
   const openChapterList = useCallback(() => {
     chapterSheetProgress.setValue(0);
@@ -565,6 +588,7 @@ export function ReaderScreen({
           styles.paragraph,
           {
             color: palette.text,
+            fontFamily: getReaderFontFamily(preferences.fontFamily),
             fontSize: preferences.fontSize,
             lineHeight: preferences.fontSize * preferences.lineHeight,
             marginBottom: preferences.paragraphSpacing,
@@ -622,6 +646,15 @@ export function ReaderScreen({
             </Text>
           </View>
           <View style={styles.headerActions}>
+            {onOpenOriginal ? (
+              <Pressable
+                accessibilityLabel="回到原网页"
+                onPress={() => onOpenOriginal(currentOriginalUrl)}
+                style={styles.iconButton}
+              >
+                <Ionicons name="globe-outline" size={22} color={palette.text} />
+              </Pressable>
+            ) : null}
             <Pressable accessibilityLabel="章节目录" onPress={openChapterList} style={styles.iconButton}>
               <Ionicons name="list-outline" size={23} color={palette.text} />
             </Pressable>
@@ -873,6 +906,25 @@ export function ReaderScreen({
                   <Ionicons name="close" size={20} color={palette.text} />
                 </Pressable>
               </View>
+              {onOpenOriginal ? (
+                <Pressable
+                  accessibilityLabel="在原网页查找更多章节"
+                  onPress={() => {
+                    closeChapterList();
+                    onOpenOriginal(book.tocUrl || currentOriginalUrl);
+                  }}
+                  style={[styles.webChapterAction, { backgroundColor: palette.panel }]}
+                >
+                  <View style={[styles.webChapterActionIcon, { backgroundColor: `${palette.accent}18` }]}>
+                    <Ionicons name="search-outline" size={19} color={palette.accent} />
+                  </View>
+                  <View style={styles.webChapterActionCopy}>
+                    <Text style={[styles.webChapterActionTitle, { color: palette.text }]}>在原网页查找更多章节</Text>
+                    <Text style={[styles.webChapterActionText, { color: palette.muted }]}>回到网页目录，继续发现并保存后续章节</Text>
+                  </View>
+                  <Ionicons name="open-outline" size={18} color={palette.muted} />
+                </Pressable>
+              ) : null}
               <FlatList
                 data={chapterEntries}
                 getItemLayout={(_, index) => ({ index, length: 59, offset: 59 * index })}
@@ -1063,7 +1115,27 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 36,
   },
-  chapterList: { flexGrow: 0 },
+  webChapterAction: {
+    alignItems: "center",
+    borderRadius: 18,
+    flexDirection: "row",
+    gap: 11,
+    marginBottom: 8,
+    marginHorizontal: 18,
+    minHeight: 68,
+    paddingHorizontal: 13,
+  },
+  webChapterActionIcon: {
+    alignItems: "center",
+    borderRadius: 13,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
+  },
+  webChapterActionCopy: { flex: 1 },
+  webChapterActionTitle: { fontSize: 13, fontWeight: "700" },
+  webChapterActionText: { fontSize: 10.5, marginTop: 4 },
+  chapterList: { flexGrow: 0, flexShrink: 1 },
   chapterItem: {
     alignItems: "center",
     flexDirection: "row",

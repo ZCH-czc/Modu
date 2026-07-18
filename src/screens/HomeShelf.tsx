@@ -112,7 +112,7 @@ export function HomeShelf({
       <View style={[styles.contentFrame, { width: contentWidth }]}>
         <View style={[styles.header, isTablet && styles.headerTablet]}>
           <View>
-            <Text style={styles.eyebrow}>PERSONAL LIBRARY</Text>
+            <Text style={styles.eyebrow}>A ROOM FOR STORIES</Text>
             <Text style={[styles.title, isTablet && styles.titleTablet]}>书架</Text>
           </View>
           <View style={styles.headerActions}>
@@ -163,9 +163,9 @@ export function HomeShelf({
             </View>
             <View style={styles.quoteCopy}>
               <Text style={styles.quoteText}>
-                {isTablet ? "一页一页，读见更大的世界" : "读见更大的世界"}
+                {isTablet ? "翻一页人间，藏一寸光阴" : "一页人间，一寸光阴"}
               </Text>
-              {isTablet ? <Text style={styles.quoteSubtext}>在安静里，与文字重新相逢</Text> : null}
+              {isTablet ? <Text style={styles.quoteSubtext}>让故事落座，让心绪归静</Text> : null}
             </View>
           </View>
         </LinearGradient>
@@ -173,7 +173,7 @@ export function HomeShelf({
         <View style={styles.sectionHeader}>
           <View>
             <Text style={styles.sectionTitle}>我的藏书</Text>
-            <Text style={styles.sectionSubtitle}>最近阅读与本地收藏</Text>
+            <Text style={styles.sectionSubtitle}>近来翻过的页，与珍藏的故事</Text>
           </View>
           <View style={styles.layoutBadge}>
             <Ionicons name={columns > 1 ? "grid-outline" : "list-outline"} color="#6D7E74" size={14} />
@@ -371,8 +371,8 @@ const ImportCard = memo(function ImportCard({
           </View>
         </View>
         <View style={styles.importCopy}>
-          <Text style={styles.emptyTitle}>把下一本书放进来</Text>
-          <Text style={styles.emptyText}>导入 EPUB 或 PDF，本地安静阅读</Text>
+          <Text style={styles.emptyTitle}>为书架添一册新故事</Text>
+          <Text style={styles.emptyText}>从 EPUB 或 PDF，拾一段安静时光</Text>
         </View>
         <View style={styles.importArrow}>
           <Ionicons name="cloud-upload-outline" color="#F6F0E5" size={20} />

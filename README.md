@@ -2,15 +2,18 @@
 
 A calm, polished, local-first reading app built with React Native and Expo.
 
-Modu combines a native bookshelf, EPUB/PDF import, dynamic book sources, web discovery, and a focused reader designed for phones, tablets, and desktop use.
+Modu combines a native bookshelf, EPUB/PDF/TXT import, dynamic book sources, web discovery, and a focused reader designed for phones, tablets, and desktop use.
 
 [Download the latest release](https://github.com/ZCH-czc/Modu/releases/latest)
+
+[Read the changelog](CHANGELOG.md)
 
 ## Highlights
 
 - Local bookshelf with add, import, progress tracking, and removal workflows
-- EPUB parsing, chapter navigation, pagination, and persistent reading progress
+- EPUB and TXT reading with chapter navigation, pagination, and persistent reading progress
 - PDF import and reading through the integrated document experience
+- Nearby transfer from any browser on the same Wi-Fi, with explicit in-app approval
 - Dynamic JSON book-source import without hard-coded source rules
 - Online search, chapter-by-chapter reading, background continuation, and full-book download
 - Built-in WebView discovery with a reader mode that can save books to the bookshelf

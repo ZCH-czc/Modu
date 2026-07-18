@@ -1,10 +1,11 @@
 export type AppTab = 'shelf' | 'settings';
 export type ReaderTheme = 'paper' | 'white' | 'green' | 'night';
 export type PageTurn = 'slide' | 'cover' | 'none';
-export type BookFormat = 'sample' | 'epub' | 'pdf' | 'web' | 'webclip';
+export type BookFormat = 'sample' | 'epub' | 'pdf' | 'txt' | 'web' | 'webclip';
 export type ReaderOrientation = 'auto' | 'portrait' | 'landscape';
 export type TextAlignment = 'left' | 'justify';
 export type WebReaderFlow = 'paged' | 'scroll';
+export type ReaderFont = 'serif' | 'sans' | 'system';
 
 export interface Book {
   id: string;
@@ -53,11 +54,13 @@ export interface WebPageExtraction {
   content: string;
   url: string;
   nextUrl?: string;
+  tocUrl?: string;
   chapters?: WebChapterExtraction[];
 }
 
 export interface ReaderPreferences {
   theme: ReaderTheme;
+  fontFamily: ReaderFont;
   fontSize: number;
   lineHeight: number;
   paragraphSpacing: number;

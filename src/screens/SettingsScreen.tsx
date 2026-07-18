@@ -35,17 +35,20 @@ import {
 import type {
   Book,
   PageTurn,
+  ReaderFont,
   ReaderOrientation,
   ReaderPreferences,
   ReaderTheme,
   TextAlignment,
 } from "../types";
+import { getReaderFontFamily, readerFontOptions } from "../utils/readerFonts";
 
 interface Props {
   preferences: ReaderPreferences;
   importedBooks: Book[];
   sourceCount: number;
   onManageSources: () => void;
+  onOpenLanTransfer: () => void;
   onOpenGuide: () => void;
   onChange: (patch: Partial<ReaderPreferences>) => void;
   onVolumeKeysChange: (enabled: boolean) => void;
@@ -127,8 +130,8 @@ export function SettingsScreen(props: Props) {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.eyebrow}>阅读偏好</Text>
-            <Text style={styles.heading}>阅读设置</Text>
+            <Text style={styles.eyebrow}>字里行间</Text>
+            <Text style={styles.heading}>阅读偏好</Text>
           </View>
           <View style={styles.seal}><Text style={styles.sealText}>墨</Text></View>
         </View>
@@ -138,7 +141,7 @@ export function SettingsScreen(props: Props) {
             <Ionicons name="leaf-outline" size={24} color="#F3DFC0" />
           </View>
           <View style={styles.profileText}>
-            <Text style={styles.profileName}>静心阅读者</Text>
+            <Text style={styles.profileName}>愿每一次翻页，都有清风作伴</Text>
           </View>
         </View>
 
@@ -155,7 +158,7 @@ export function SettingsScreen(props: Props) {
           />
         </Section>
 
-        <Section title="阅读外观">
+        <Section title="纸页风貌">
           <Text style={styles.label}>阅读主题</Text>
           <View style={styles.themeRow}>
             {themes.map((theme) => (
@@ -167,6 +170,10 @@ export function SettingsScreen(props: Props) {
               />
             ))}
           </View>
+          <FontPicker
+            value={props.preferences.fontFamily}
+            onChange={(fontFamily) => props.onChange({ fontFamily })}
+          />
           <Divider />
           <StepperRow
             title="字号"
@@ -244,7 +251,7 @@ export function SettingsScreen(props: Props) {
           />
         </Section>
 
-        <Section title="屏幕与设备">
+        <Section title="屏幕与光">
           <SegmentRow<ReaderOrientation>
             title="屏幕方向"
             value={props.preferences.orientation}
@@ -331,7 +338,13 @@ export function SettingsScreen(props: Props) {
           ) : null}
         </Section>
 
-        <Section title="书籍与数据">
+        <Section title="藏书与数据">
+          <ActionRow
+            icon="wifi-outline"
+            title="局域网传书"
+            value="打开"
+            onPress={props.onOpenLanTransfer}
+          />
           <ActionRow
             icon="globe-outline"
             title="在线书源"
@@ -457,6 +470,59 @@ function ThemeOption({
   );
 }
 
+function FontPicker({
+  value,
+  onChange,
+}: {
+  value: ReaderFont;
+  onChange: (font: ReaderFont) => void;
+}) {
+  return (
+    <View style={styles.fontPicker}>
+      <Text style={styles.label}>正文字体</Text>
+      <View style={styles.fontOptions}>
+        {readerFontOptions.map((option) => (
+          <FontOption
+            active={value === option.key}
+            key={option.key}
+            onPress={() => onChange(option.key)}
+            option={option}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function FontOption({
+  option,
+  active,
+  onPress,
+}: {
+  option: (typeof readerFontOptions)[number];
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { t } = useI18n();
+  const progress = useSharedValue(active ? 1 : 0);
+  useEffect(() => {
+    progress.value = withSpring(active ? 1 : 0, { damping: 17, stiffness: 250, mass: 0.55 });
+  }, [active, progress]);
+  const optionStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(progress.value, [0, 1], ["#F0ECE5", "#E4ECE6"]),
+    borderColor: interpolateColor(progress.value, [0, 1], ["#DDD8CF", "#6E8D7D"]),
+    transform: [{ scale: interpolate(progress.value, [0, 1], [0.98, 1]) }],
+  }));
+  return (
+    <Pressable accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={onPress} style={styles.fontOptionHit}>
+      <Animated.View style={[styles.fontOption, optionStyle]}>
+        <Animated.Text style={[styles.fontSample, { fontFamily: getReaderFontFamily(option.key) }]}>{t(option.sample)}</Animated.Text>
+        <Text style={[styles.fontLabel, active && styles.fontLabelActive]}>{t(option.label)}</Text>
+        {active ? <Ionicons color="#4D705E" name="checkmark-circle" size={16} style={styles.fontCheck} /> : null}
+      </Animated.View>
+    </Pressable>
+  );
+}
 function StepperRow({
   title,
   description,
@@ -873,6 +939,22 @@ const styles = StyleSheet.create({
     width: 36,
   },
   themeLabel: { fontSize: 9.5, fontWeight: "700", marginTop: 6 },
+  fontPicker: { paddingBottom: 14 },
+  fontOptions: { flexDirection: "row", gap: 8, paddingTop: 9 },
+  fontOptionHit: { flex: 1 },
+  fontOption: {
+    alignItems: "center",
+    borderRadius: 15,
+    borderWidth: 1,
+    minHeight: 70,
+    overflow: "hidden",
+    paddingHorizontal: 5,
+    paddingVertical: 10,
+  },
+  fontSample: { color: "#34463D", fontSize: 16 },
+  fontLabel: { color: "#89867F", fontSize: 9, fontWeight: "700", marginTop: 7 },
+  fontLabelActive: { color: "#486756" },
+  fontCheck: { position: "absolute", right: 5, top: 5 },
   divider: { backgroundColor: "#DED9D0", height: 1 },
   row: {
     alignItems: "center",

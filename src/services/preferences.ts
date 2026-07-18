@@ -14,6 +14,7 @@ const PROGRESS_KEY = '@modu/progress/v2';
 
 export const defaultPreferences: ReaderPreferences = {
   theme: 'paper',
+  fontFamily: 'serif',
   fontSize: 19,
   lineHeight: 1.9,
   paragraphSpacing: 16,

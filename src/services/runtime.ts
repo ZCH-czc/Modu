@@ -27,6 +27,7 @@ const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
 export const defaultPreferences: ReaderPreferences = {
   theme: "paper",
+  fontFamily: "serif",
   fontSize: 19,
   lineHeight: 1.75,
   paragraphSpacing: 16,
@@ -239,22 +240,39 @@ export async function hydrateBook(book: Book): Promise<Book> {
 
 export async function importDocument(existingBooks: Book[]): Promise<Book | null> {
   const result = await DocumentPicker.getDocumentAsync({
-    type: ["application/epub+zip", "application/pdf"],
+    type: ["application/epub+zip", "application/pdf", "text/plain"],
     copyToCacheDirectory: true,
   });
   if (result.canceled) return null;
 
   const asset = result.assets[0];
-  if (asset.size && asset.size > MAX_FILE_SIZE) {
-    throw new Error("文件超过 25 MB，请选择更小的 EPUB 或 PDF。");
+  return importBookFromUri(asset.uri, asset.name, asset.size, existingBooks);
+}
+
+export async function importBookFromUri(
+  sourceUri: string,
+  sourceName: string,
+  sourceSize: number | undefined,
+  existingBooks: Book[],
+): Promise<Book> {
+  if (sourceSize && sourceSize > MAX_FILE_SIZE) {
+    throw new Error("文件超过 25 MB，请选择更小的 EPUB、TXT 或 PDF。");
   }
 
-  const extension = asset.name.toLowerCase().endsWith(".pdf") ? "pdf" : "epub";
+  const normalizedName = sourceName.trim() || `received-${Date.now()}.txt`;
+  const extension = normalizedName.toLowerCase().match(/\.(epub|pdf|txt)$/)?.[1] as
+    | "epub"
+    | "pdf"
+    | "txt"
+    | undefined;
+  if (!extension) throw new Error("仅支持 EPUB、TXT 和 PDF 文件。");
+
   const id = `imported-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const libraryDirectory = `${FileSystem.documentDirectory}library/`;
   await FileSystem.makeDirectoryAsync(libraryDirectory, { intermediates: true });
   const fileUri = `${libraryDirectory}${id}.${extension}`;
-  await FileSystem.copyAsync({ from: asset.uri, to: fileUri });
+  const copySource = sourceUri.includes("://") ? sourceUri : `file://${sourceUri}`;
+  await FileSystem.copyAsync({ from: copySource, to: fileUri });
 
   let book: Book;
   if (extension === "pdf") {
@@ -269,7 +287,7 @@ export async function importDocument(existingBooks: Book[]): Promise<Book | null
     }
     book = {
       id,
-      title: asset.name.replace(/\.pdf$/i, ""),
+      title: normalizedName.replace(/\.pdf$/i, ""),
       author: "本地 PDF",
       category: "PDF",
       currentChapter: "PDF 文档",
@@ -281,15 +299,39 @@ export async function importDocument(existingBooks: Book[]): Promise<Book | null
       pageTitles: ["PDF"],
       format: "pdf",
       fileUri,
+      sourceSize,
+    };
+  } else if (extension === "txt") {
+    const content = (await FileSystem.readAsStringAsync(fileUri)).replace(/^\uFEFF/, "").trim();
+    if (content.length < 20) {
+      await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      throw new Error("这个 TXT 文件没有足够的正文内容。");
+    }
+    const pages = paginate(content, 720);
+    book = {
+      id,
+      title: normalizedName.replace(/\.txt$/i, ""),
+      author: "本地文本",
+      category: "TXT",
+      currentChapter: "正文",
+      lastRead: "刚刚导入",
+      coverColors: ["#6A725D", "#30372B"],
+      accent: "#A3AD91",
+      progress: 0,
+      pages,
+      pageTitles: pages.map(() => "正文"),
+      format: "txt",
+      fileUri,
+      sourceSize,
     };
   } else {
-    book = await parseEpub(id, fileUri, asset.name);
+    book = await parseEpub(id, fileUri, normalizedName);
+    book.sourceSize = sourceSize;
   }
 
   await persistBooks([...existingBooks, book]);
   return book;
 }
-
 export async function deleteImportedBook(book: Book, books: Book[]) {
   if (book.fileUri) {
     await FileSystem.deleteAsync(book.fileUri, { idempotent: true });

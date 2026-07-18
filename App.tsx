@@ -37,6 +37,7 @@ import { HomeShelf } from "./src/screens/HomeShelf";
 import { PdfReaderScreen } from "./src/screens/PdfReaderScreen";
 import { ReaderScreen } from "./src/screens/ReaderScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
+import { LanTransferModal, type LanTransferRequest } from "./src/screens/LanTransferModal";
 import { WebReaderModal } from "./src/screens/WebReaderModal";
 import {
   clearOnlineChapterCache,
@@ -62,6 +63,7 @@ import {
   defaultPreferences,
   deleteImportedBook,
   importDocument,
+  importBookFromUri,
   loadHiddenSampleBooks,
   loadImportedBooks,
   loadOnboardingComplete,
@@ -73,7 +75,7 @@ import {
   savePreferences,
   saveProgress,
 } from "./src/services/runtime";
-import { createWebCaptureBook, createWebCaptureExtraction } from "./src/services/webCapture";
+import { createWebCaptureBook } from "./src/services/webCapture";
 import type {
   AppTab,
   Book,
@@ -136,7 +138,9 @@ function AppContent() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [webReaderVisible, setWebReaderVisible] = useState(false);
   const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [lanTransferVisible, setLanTransferVisible] = useState(false);
   const [webReaderInitialExtraction, setWebReaderInitialExtraction] = useState<WebPageExtraction>();
+  const [webReaderInitialUrl, setWebReaderInitialUrl] = useState<string>();
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineSession, setOnlineSession] = useState<OnlineSession>();
   const [downloadState, setDownloadState] = useState<DownloadState>();
@@ -185,6 +189,7 @@ function AppContent() {
   const closeWebReader = () => {
     setWebReaderVisible(false);
     setWebReaderInitialExtraction(undefined);
+    setWebReaderInitialUrl(undefined);
   };
 
   const finishOnboarding = useCallback(() => {
@@ -228,6 +233,10 @@ function AppContent() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (lanTransferVisible) {
+        setLanTransferVisible(false);
+        return true;
+      }
       if (onboardingVisible) {
         finishOnboarding();
         return true;
@@ -251,7 +260,7 @@ function AppContent() {
       return false;
     });
     return () => subscription.remove();
-  }, [currentBook, finishOnboarding, onboardingVisible, sourceModalVisible, tab, webReaderVisible]);
+  }, [currentBook, finishOnboarding, lanTransferVisible, onboardingVisible, sourceModalVisible, tab, webReaderVisible]);
 
   useEffect(() => {
     Promise.all([
@@ -570,13 +579,11 @@ function AppContent() {
 
   const handleOpenBook = (book: Book) => {
     if (book.format === "webclip") {
-      const extraction = createWebCaptureExtraction(book);
-      if (!extraction) {
+      if (!book.pages.length) {
         Alert.alert("内容不可用", "这本网页书缺少可恢复的正文。");
         return;
       }
-      setWebReaderInitialExtraction(extraction);
-      setWebReaderVisible(true);
+      presentBook(book);
       return;
     }
     if (book.format === "web") {
@@ -873,6 +880,17 @@ function AppContent() {
     Alert.alert("当前设备暂不支持", "音量键翻页将在支持的设备上自动启用。");
   };
 
+  const handleLanTransferAccept = async (request: LanTransferRequest) => {
+    const book = await importBookFromUri(
+      `file://${request.path}`,
+      request.name,
+      request.size,
+      importedBooks,
+    );
+    setImportedBooks((items) => [...items, book]);
+  };
+
+  const stableHandleLanTransferAccept = useEvent(handleLanTransferAccept);
   const stableHandleImport = useEvent(handleImport);
   const stableHandleOpenBook = useEvent(handleOpenBook);
   const stableHandleRemoveOnlineBook = useEvent(handleRemoveOnlineBook);
@@ -889,15 +907,27 @@ function AppContent() {
   const openSourceModal = useCallback(() => setSourceModalVisible(true), []);
   const openWebReader = useCallback(() => {
     setWebReaderInitialExtraction(undefined);
+    setWebReaderInitialUrl(undefined);
     setWebReaderVisible(true);
   }, []);
+
+  const openCapturedWebPage = useEvent((url?: string) => {
+    const target = url || currentBook?.sourceUrl;
+    if (!target) {
+      Alert.alert("原网页不可用", "这本网页书没有保存原始网址。");
+      return;
+    }
+    setWebReaderInitialExtraction(undefined);
+    setWebReaderInitialUrl(target);
+    setWebReaderVisible(true);
+  });
 
   if (!ready) {
     return (
       <SafeAreaProvider>
         <View style={styles.loading}>
           <ActivityIndicator color="#496052" size="large" />
-          <Text style={styles.loadingText}>正在整理书架…</Text>
+          <Text style={styles.loadingText}>正在把故事放回原处…</Text>
         </View>
       </SafeAreaProvider>
     );
@@ -953,6 +983,7 @@ function AppContent() {
                   onDeleteBook={stableHandleDeleteBook}
                   onManageSources={openSourceModal}
                   onOpenGuide={() => setOnboardingVisible(true)}
+                  onOpenLanTransfer={() => setLanTransferVisible(true)}
                   onVolumeKeysChange={stableHandleVolumeKeys}
                   preferences={preferences}
                   sourceCount={sources.length}
@@ -989,7 +1020,7 @@ function AppContent() {
             {importing ? (
               <View style={styles.importing}>
                 <ActivityIndicator color="#F7F4ED" />
-                <Text style={styles.importingText}>正在解析电子书…</Text>
+                <Text style={styles.importingText}>正在轻轻拆开这本书…</Text>
               </View>
             ) : null}
           </SafeAreaView>
@@ -1043,6 +1074,7 @@ function AppContent() {
                 onChapterBoundary={handleChapterBoundary}
                 onChapterSelect={currentBook.format === "web" ? handleChapterSelect : undefined}
                 onDownloadAll={currentBook.format === "web" ? () => void handleDownloadAll() : undefined}
+                onOpenOriginal={currentBook.format === "webclip" ? openCapturedWebPage : undefined}
                 onPageChange={handlePageChange}
                 preferences={preferences}
               />
@@ -1064,14 +1096,22 @@ function AppContent() {
 
         <WebReaderModal
           initialExtraction={webReaderInitialExtraction}
+          initialUrl={webReaderInitialUrl}
+          readerFont={preferences.fontFamily}
           webReaderFlow={preferences.webReaderFlow}
           onWebReaderFlowChange={(webReaderFlow) => stableUpdatePreferences({ webReaderFlow })}
           onAdd={stableHandleAddWebCapture}
           onClose={closeWebReader}
           onRead={stableHandleReadWebCapture}
+          onReaderFontChange={(fontFamily) => stableUpdatePreferences({ fontFamily })}
           visible={webReaderVisible}
         />
 
+        <LanTransferModal
+          onAccept={stableHandleLanTransferAccept}
+          onClose={() => setLanTransferVisible(false)}
+          visible={lanTransferVisible}
+        />
         <OnboardingModal onComplete={finishOnboarding} visible={onboardingVisible} />
 
         {onlineLoading && !sourceModalVisible ? (

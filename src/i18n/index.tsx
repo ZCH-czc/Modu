@@ -43,6 +43,7 @@ function interpolate(value: string, params?: TranslationParams) {
 function translatePattern(source: string): string | undefined {
   let match: RegExpMatchArray | null;
   if ((match = source.match(/^(\d+) 本$/))) return `${match[1]} books`;
+  if ((match = source.match(/^有 (\d+) 本书等待确认$/))) return `${match[1]} books await confirmation`;
   if ((match = source.match(/^(\d+) 个$/))) return match[1];
   if ((match = source.match(/^(\d+) 章$/))) return `${match[1]} chapters`;
   if ((match = source.match(/^第 (\d+) 页$/))) return `Page ${match[1]}`;
@@ -52,6 +53,9 @@ function translatePattern(source: string): string | undefined {
   if ((match = source.match(/^已清理 (\d+) 个缓存项目$/))) return `Cleared ${match[1]} cached items`;
   if ((match = source.match(/^已导入或更新 (\d+) 个书源$/))) return `Imported or updated ${match[1]} sources`;
   if ((match = source.match(/^《(.+)》已加入书架。$/))) return `“${match[1]}” was added to your library.`;
+  if ((match = source.match(/^《(.+)》已收入书架$/))) return `“${match[1]}” was received into your library`;
+  if ((match = source.match(/^《(.+)》未能收入书架$/))) return `“${match[1]}” could not be added to your library`;
+  if ((match = source.match(/^已婉拒《(.+)》$/))) return `Declined “${match[1]}”`;
   if ((match = source.match(/^《(.+)》已保存在本机。$/))) return `“${match[1]}” was saved on this device.`;
   if ((match = source.match(/^《(.+)》已可离线阅读。$/))) return `“${match[1]}” is available offline.`;
   if ((match = source.match(/^确定将《(.+)》从书架移除吗？$/))) return `Remove “${match[1]}” from your library?`;

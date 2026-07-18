@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>墨读 · 局域网传书</title>
+  <style>
+    :root{color-scheme:light;--paper:#f5f1e8;--card:#fbf9f4;--ink:#29352e;--muted:#858b84;--green:#3f6250;--pale:#e6eee8;--line:#dcd8cf;--gold:#eed8b5}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 78% 8%,#dfe9e2 0,transparent 29%),linear-gradient(145deg,#f7f4ed,#eeeae1);color:var(--ink);font-family:Inter,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(90deg,transparent 49.8%,#71837822 50%,transparent 50.2%);background-size:74px 74px}
+    .shell{width:min(920px,calc(100% - 32px));margin:auto;padding:48px 0 64px}.top{display:flex;align-items:center;gap:15px;margin-bottom:30px}.seal{width:58px;height:58px;border-radius:20px;background:var(--green);color:var(--gold);display:grid;place-items:center;font:900 31px Georgia,"STSong",serif;box-shadow:0 12px 30px #263b3024;border:1px solid #fff4}.brand small{display:block;color:#859087;font-size:10px;font-weight:800;letter-spacing:3px}.brand h1{font:800 clamp(25px,4vw,38px) Georgia,"STSong",serif;margin:4px 0 0}.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:20px}.card{background:#fbf9f4eF;border:1px solid var(--line);border-radius:30px;box-shadow:0 18px 45px #25372d12;overflow:hidden}.intro{padding:34px}.eyebrow{font-size:10px;font-weight:900;letter-spacing:2.5px;color:#688073}.intro h2{font:800 clamp(28px,5vw,48px)/1.18 Georgia,"STSong",serif;margin:16px 0 13px}.intro p{color:var(--muted);line-height:1.8;margin:0;font-size:14px}.steps{display:grid;gap:11px;margin-top:28px}.step{display:flex;align-items:center;gap:12px;color:#59655e;font-size:13px}.num{width:27px;height:27px;border-radius:10px;background:var(--pale);display:grid;place-items:center;color:var(--green);font-weight:900}.privacy{margin-top:28px;padding:14px 16px;border-radius:17px;background:#e8eee9;color:#617067;font-size:12px;line-height:1.6}.upload{padding:22px;display:flex;flex-direction:column}.drop{min-height:260px;border:1.5px dashed #aebdb4;border-radius:24px;background:#f6f4ed;display:flex;flex:1;align-items:center;justify-content:center;text-align:center;padding:28px;transition:.2s}.drop.over{border-color:var(--green);background:#eaf0eb;transform:scale(.995)}.dropIcon{width:64px;height:64px;border-radius:22px;background:var(--pale);display:grid;place-items:center;margin:0 auto 18px;color:var(--green);font-size:29px}.drop h3{font-size:18px;margin:0 0 8px}.drop p{font-size:12px;color:var(--muted);margin:0 0 20px}.choose{border:0;border-radius:16px;padding:13px 20px;background:var(--green);color:#fbf7ed;font-weight:800;cursor:pointer;box-shadow:0 9px 20px #39574624}.choose:active{transform:scale(.98)}input{display:none}.queue{margin-top:15px;display:grid;gap:9px}.file{display:flex;align-items:center;gap:11px;padding:12px;border-radius:17px;background:#f0eee7;border:1px solid #e0dcd3}.fileMark{width:38px;height:38px;border-radius:13px;background:#e2ebe5;display:grid;place-items:center;color:var(--green);font-size:11px;font-weight:900}.fileCopy{min-width:0;flex:1}.fileName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:800}.fileState{font-size:10px;color:var(--muted);margin-top:4px}.dot{width:8px;height:8px;border-radius:50%;background:#aeb3ae}.dot.wait{background:#d19a52;animation:pulse 1.1s infinite}.dot.ok{background:#5d8c72}.dot.no{background:#ad6a62}@keyframes pulse{50%{opacity:.35}}.foot{text-align:center;color:#9a9c97;font-size:10px;margin-top:22px;letter-spacing:.3px}@media(max-width:720px){.shell{padding-top:26px}.hero{grid-template-columns:1fr}.intro{padding:27px}.drop{min-height:230px}.top{margin-left:5px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top"><div class="seal">墨</div><div class="brand"><small>MODU · NEARBY</small><h1>局域网传书</h1></div></header>
+    <section class="hero">
+      <article class="card intro">
+        <div class="eyebrow">让故事越过一段无线电波</div>
+        <h2>把书轻轻送到<br>另一块屏幕</h2>
+        <p>选择 EPUB、TXT 或 PDF。文件抵达后，需要在墨读设备上确认，才会真正走进书架。</p>
+        <div class="steps"><div class="step"><span class="num">1</span><span>两台设备连接同一个 Wi-Fi</span></div><div class="step"><span class="num">2</span><span>选择或拖入想传送的书</span></div><div class="step"><span class="num">3</span><span>回到墨读，确认接收</span></div></div>
+        <div class="privacy">传输只在当前局域网内进行。关闭手机上的“局域网传书”页面后，接收服务会立即停止。</div>
+      </article>
+      <article class="card upload">
+        <div class="drop" id="drop"><div><div class="dropIcon">⇧</div><h3>把书放在这里</h3><p>支持 EPUB · TXT · PDF，单个文件不超过 25 MB</p><label class="choose" for="picker">选择书籍</label><input id="picker" type="file" multiple accept=".epub,.txt,.pdf,application/epub+zip,text/plain,application/pdf"></div></div>
+        <div class="queue" id="queue"></div>
+      </article>
+    </section>
+    <div class="foot">墨读不会将文件上传到互联网</div>
+  </main>
+  <script>
+    const EN = !navigator.language.toLowerCase().startsWith('zh');
+    const tr = (zh, en) => EN ? en : zh;
+    if (EN) {
+      document.documentElement.lang = 'en';
+      document.title = 'Modu · Nearby Transfer';
+      const copy = new Map([
+        ['局域网传书', 'Nearby Transfer'],
+        ['让故事越过一段无线电波', 'Let stories travel across the air'],
+        ['把书轻轻送到', 'Send a book gently'],
+        ['另一块屏幕', 'to another screen'],
+        ['选择 EPUB、TXT 或 PDF。文件抵达后，需要在墨读设备上确认，才会真正走进书架。', 'Choose an EPUB, TXT, or PDF. The book enters your library only after you approve it on the Modu device.'],
+        ['两台设备连接同一个 Wi-Fi', 'Connect both devices to the same Wi-Fi'],
+        ['选择或拖入想传送的书', 'Choose or drop the books you want to send'],
+        ['回到墨读，确认接收', 'Return to Modu and approve the transfer'],
+        ['传输只在当前局域网内进行。关闭手机上的“局域网传书”页面后，接收服务会立即停止。', 'Transfers stay on your local network. The receiving service stops as soon as you close Nearby Transfer on the Modu device.'],
+        ['把书放在这里', 'Place your books here'],
+        ['支持 EPUB · TXT · PDF，单个文件不超过 25 MB', 'EPUB · TXT · PDF, up to 25 MB each'],
+        ['选择书籍', 'Choose Books'],
+        ['墨读不会将文件上传到互联网', 'Modu never uploads these files to the internet'],
+      ]);
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach((node) => {
+        const source = node.nodeValue.trim();
+        if (!source) return;
+        const translated = copy.get(source.replace(/\s*\n\s*/, '\n'));
+        if (translated) node.nodeValue = node.nodeValue.replace(source, translated);
+      });
+    }
+
+    const drop = document.getElementById('drop');
+    const picker = document.getElementById('picker');
+    const queue = document.getElementById('queue');
+    ['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (event) => {
+      event.preventDefault();
+      drop.classList.add('over');
+    }));
+    ['dragleave', 'drop'].forEach((type) => drop.addEventListener(type, (event) => {
+      event.preventDefault();
+      drop.classList.remove('over');
+    }));
+    drop.addEventListener('drop', (event) => sendFiles(event.dataTransfer.files));
+    picker.addEventListener('change', () => {
+      sendFiles(picker.files);
+      picker.value = '';
+    });
+
+    function sizeText(size) {
+      return size > 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1024))} KB`;
+    }
+    function row(file) {
+      const element = document.createElement('div');
+      element.className = 'file';
+      element.innerHTML = `<div class="fileMark">${file.name.split('.').pop().toUpperCase()}</div><div class="fileCopy"><div class="fileName"></div><div class="fileState">${tr('准备传送', 'Ready to send')} · ${sizeText(file.size)}</div></div><span class="dot wait"></span>`;
+      element.querySelector('.fileName').textContent = file.name;
+      queue.prepend(element);
+      return element;
+    }
+    async function sendFiles(list) {
+      for (const file of Array.from(list)) await send(file);
+    }
+    async function send(file) {
+      const element = row(file);
+      const state = element.querySelector('.fileState');
+      const dot = element.querySelector('.dot');
+      if (!/\.(epub|txt|pdf)$/i.test(file.name)) {
+        state.textContent = tr('格式不受支持', 'Unsupported file type');
+        dot.className = 'dot no';
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        state.textContent = tr('文件超过 25 MB', 'File is larger than 25 MB');
+        dot.className = 'dot no';
+        return;
+      }
+      try {
+        state.textContent = tr('正在穿过局域网…', 'Travelling across your local network…');
+        const response = await fetch('/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+          body: file,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || tr('传送失败', 'Transfer failed'));
+        state.textContent = tr('已送达，等待墨读确认', 'Delivered, waiting for approval in Modu');
+        await watch(data.id, state, dot);
+      } catch (error) {
+        state.textContent = error.message || tr('传送失败', 'Transfer failed');
+        dot.className = 'dot no';
+      }
+    }
+    async function watch(id, state, dot) {
+      for (let index = 0; index < 300; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          const response = await fetch(`/status?id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+          if (!response.ok) continue;
+          const data = await response.json();
+          if (data.status === 'accepted') {
+            state.textContent = tr('已被墨读收下', 'Added to the Modu library');
+            dot.className = 'dot ok';
+            return;
+          }
+          if (data.status === 'rejected') {
+            state.textContent = tr('设备婉拒了这本书', 'The Modu device declined this book');
+            dot.className = 'dot no';
+            return;
+          }
+        } catch (_) {
+          state.textContent = tr('与墨读的连接已断开', 'Connection to Modu was lost');
+          dot.className = 'dot no';
+          return;
+        }
+      }
+      state.textContent = tr('等待确认超时', 'Approval timed out');
+      dot.className = 'dot no';
+    }
+  </script>
+</body>
+</html>
