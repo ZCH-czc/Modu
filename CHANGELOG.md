@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-18
+
 ### Added
 
 - Added nearby transfer on Android: devices on the same Wi-Fi can open a responsive Modu-styled web page and send EPUB, TXT, or PDF books.
@@ -57,7 +59,8 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 - Added built-in web discovery with reader mode, horizontal pagination, and optional vertical scrolling.
 - Added animated reader settings, onboarding, predictive Android back gestures, and initial performance optimizations.
 
-[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.3
 [1.5.2]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.2
 [1.5.1]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.1
 [1.5.0]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.0

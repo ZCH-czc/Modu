@@ -385,7 +385,7 @@ export function SettingsScreen(props: Props) {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.2"
+            value="v1.5.3"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -858,7 +858,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.2</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.3</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>
