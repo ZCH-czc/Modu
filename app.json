@@ -1,19 +1,29 @@
 {
   "expo": {
-    "name": "墨读",
+    "name": "\u58A8\u8BFB",
     "slug": "modu-reader-v3",
-    "version": "1.5.1",
+    "version": "1.5.2",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "plugins": [
       "expo-document-picker",
       "expo-screen-orientation",
       "expo-dev-client",
       "expo-notifications",
-      "expo-splash-screen"
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F7F4ED",
+          "image": "./assets/splash.png",
+          "imageWidth": 220,
+          "resizeMode": "contain"
+        }
+      ]
     ],
     "splash": {
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#F7F4ED"
     },
@@ -21,11 +31,17 @@
       "supportsTablet": true
     },
     "android": {
+      "versionCode": 6,
       "predictiveBackGestureEnabled": true,
+      "icon": "./assets/icon.png",
       "adaptiveIcon": {
-        "backgroundColor": "#315D4B"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F7F4ED"
       },
       "package": "com.modureader.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
     },
     "description": "A calm, local-first reader for books from files, dynamic sources, and the web."
   }

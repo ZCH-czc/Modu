@@ -15,6 +15,7 @@ import {
   BackHandler,
   Easing,
   FlatList,
+  InteractionManager,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -51,6 +52,13 @@ type ChapterEntry = {
   title: string;
   pageIndex: number;
   onlineIndex?: number;
+};
+
+type ReaderPageRuntimeState = {
+  bookKey: string;
+  phase: "ready" | "turning" | "settling";
+  currentIndex: number;
+  targetIndex?: number;
 };
 
 const themes: Record<
@@ -112,6 +120,21 @@ export function ReaderScreen({
   const pageTransition = useRef(new Animated.Value(0)).current;
   const dragTranslate = useRef(new Animated.Value(0)).current;
   const pageAnimatingRef = useRef(false);
+  const pageCacheRef = useRef(new Map<number, string[]>());
+  const pageBookKey = `${book.id}:${book.onlineChapterIndex ?? "local"}:${book.pages.length}`;
+  const pageRuntimeRef = useRef<ReaderPageRuntimeState>({
+    bookKey: pageBookKey,
+    currentIndex: pageIndex,
+    phase: "ready",
+  });
+  if (pageRuntimeRef.current.bookKey !== pageBookKey) {
+    pageCacheRef.current.clear();
+    pageRuntimeRef.current = {
+      bookKey: pageBookKey,
+      currentIndex: pageIndex,
+      phase: "ready",
+    };
+  }
   const controlsOpacity = useRef(
     new Animated.Value(preferences.immersiveMode ? 0 : 1),
   ).current;
@@ -223,44 +246,54 @@ export function ReaderScreen({
     }
   }, [preferences.immersiveMode]);
 
-  const paragraphs = useMemo(
-    () =>
-      (book.pages[pageIndex] ?? "")
-        .split(/\n{2,}/)
-        .map((paragraph) => paragraph.trim())
-        .filter(Boolean),
-    [book.pages, pageIndex],
+  const getPageParagraphs = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= book.pages.length) return [];
+      const cached = pageCacheRef.current.get(index);
+      if (cached) return cached;
+      const prepared = splitReaderParagraphs(book.pages[index] ?? "");
+      pageCacheRef.current.set(index, prepared);
+      return prepared;
+    },
+    [book.pages],
   );
 
+  const paragraphs = useMemo(
+    () => getPageParagraphs(pageIndex),
+    [getPageParagraphs, pageIndex],
+  );
+  const previousParagraphs = useMemo(
+    () => getPageParagraphs(pageIndex - 1),
+    [getPageParagraphs, pageIndex],
+  );
+  const nextParagraphs = useMemo(
+    () => getPageParagraphs(pageIndex + 1),
+    [getPageParagraphs, pageIndex],
+  );
+
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      getPageParagraphs(pageIndex - 2);
+      getPageParagraphs(pageIndex + 2);
+    });
+    return () => task.cancel();
+  }, [getPageParagraphs, pageIndex]);
   const finishPageChange = useCallback(
-    (next: number, entryOffset: number, entryOpacity = 1) => {
+    (next: number) => {
+      pageRuntimeRef.current = {
+        bookKey: pageBookKey,
+        currentIndex: next,
+        phase: "ready",
+      };
       setPageIndex(next);
       onPageChange(next);
       dragTranslate.setValue(0);
-      pageTransition.setValue(entryOffset);
-      pageOpacity.setValue(entryOpacity);
-      requestAnimationFrame(() => {
-        Animated.parallel([
-          Animated.timing(pageTransition, {
-            toValue: 0,
-            duration: 185,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pageOpacity, {
-            toValue: 1,
-            duration: 165,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          pageAnimatingRef.current = false;
-        });
-      });
+      pageTransition.setValue(0);
+      pageOpacity.setValue(1);
+      pageAnimatingRef.current = false;
     },
-    [dragTranslate, onPageChange, pageOpacity, pageTransition],
+    [dragTranslate, onPageChange, pageBookKey, pageOpacity, pageTransition],
   );
-
   const selectChapter = useCallback(
     (entry: ChapterEntry) => {
       closeChapterList();
@@ -274,9 +307,32 @@ export function ReaderScreen({
       const targetPage = entry.onlineIndex !== undefined ? 0 : entry.pageIndex;
       if (targetPage === pageIndex) return;
       const direction = targetPage > pageIndex ? 1 : -1;
-      finishPageChange(targetPage, direction * 24);
+      pageAnimatingRef.current = true;
+      pageRuntimeRef.current = {
+        bookKey: pageBookKey,
+        currentIndex: pageIndex,
+        phase: "turning",
+        targetIndex: targetPage,
+      };
+      dragTranslate.setValue(0);
+      Animated.timing(dragTranslate, {
+        duration: 240,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        toValue: direction * -screenWidth,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) finishPageChange(targetPage);
+        else {
+          pageAnimatingRef.current = false;
+          pageRuntimeRef.current = {
+            bookKey: pageBookKey,
+            currentIndex: pageIndex,
+            phase: "ready",
+          };
+        }
+      });
     },
-    [book.onlineChapterIndex, closeChapterList, finishPageChange, onChapterSelect, pageIndex],
+    [book.onlineChapterIndex, closeChapterList, dragTranslate, finishPageChange, onChapterSelect, pageBookKey, pageIndex, screenWidth],
   );
 
   const resetPagePosition = useCallback(() => {
@@ -301,16 +357,18 @@ export function ReaderScreen({
       }),
     ]).start(() => {
       pageAnimatingRef.current = false;
+      pageRuntimeRef.current = {
+        bookKey: pageBookKey,
+        currentIndex: pageIndex,
+        phase: "ready",
+      };
     });
-  }, [dragTranslate, pageOpacity, pageTransition]);
+  }, [dragTranslate, pageBookKey, pageIndex, pageOpacity, pageTransition]);
 
   const changePage = useCallback(
     (direction: -1 | 1) => {
       if (pageAnimatingRef.current) return;
-      const next = Math.max(
-        0,
-        Math.min(pageIndex + direction, book.pages.length - 1),
-      );
+      const next = Math.max(0, Math.min(pageIndex + direction, book.pages.length - 1));
       if (next === pageIndex) {
         const canCrossChapter =
           (direction === -1 && canPreviousChapter) ||
@@ -320,38 +378,39 @@ export function ReaderScreen({
         return;
       }
 
-      pageAnimatingRef.current = true;
-      dragTranslate.stopAnimation();
-      pageTransition.stopAnimation();
-      pageOpacity.stopAnimation();
-      dragTranslate.setValue(0);
       if (preferences.pageTurn === "none") {
-        finishPageChange(next, 0);
+        finishPageChange(next);
         return;
       }
 
-      const exitOffset =
-        preferences.pageTurn === "slide" ? direction * -screenWidth * 0.12 : direction * -8;
-      const entryOffset =
-        preferences.pageTurn === "slide" ? direction * screenWidth * 0.1 : 0;
-      const targetOpacity = preferences.pageTurn === "cover" ? 0.9 : 1;
-
-      Animated.parallel([
-        Animated.timing(pageTransition, {
-          toValue: exitOffset,
-          duration: 135,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pageOpacity, {
-          toValue: targetOpacity,
-          duration: 135,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        if (finished) finishPageChange(next, entryOffset, targetOpacity);
-        else pageAnimatingRef.current = false;
+      pageAnimatingRef.current = true;
+      pageRuntimeRef.current = {
+        bookKey: pageBookKey,
+        currentIndex: pageIndex,
+        phase: "turning",
+        targetIndex: next,
+      };
+      dragTranslate.stopAnimation();
+      pageTransition.stopAnimation();
+      pageOpacity.stopAnimation();
+      pageTransition.setValue(0);
+      pageOpacity.setValue(1);
+      dragTranslate.setValue(0);
+      Animated.timing(dragTranslate, {
+        duration: preferences.pageTurn === "cover" ? 270 : 245,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        toValue: direction * -screenWidth,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) finishPageChange(next);
+        else {
+          pageAnimatingRef.current = false;
+          pageRuntimeRef.current = {
+            bookKey: pageBookKey,
+            currentIndex: pageIndex,
+            phase: "ready",
+          };
+        }
       });
     },
     [
@@ -360,16 +419,15 @@ export function ReaderScreen({
       canPreviousChapter,
       dragTranslate,
       finishPageChange,
+      onChapterBoundary,
       pageIndex,
       pageOpacity,
       pageTransition,
       preferences.pageTurn,
-      screenWidth,
-      onChapterBoundary,
       resetPagePosition,
+      screenWidth,
     ],
   );
-
   const progress =
     book.pages.length > 0 ? ((pageIndex + 1) / book.pages.length) * 100 : 0;
 
@@ -384,6 +442,23 @@ export function ReaderScreen({
       extrapolate: "clamp",
     });
   }, [book.pages.length, dragTranslate, pageIndex, screenWidth]);
+
+  const previousPageTranslate = useMemo(
+    () => dragTranslate.interpolate({
+      inputRange: [-screenWidth, 0, screenWidth],
+      outputRange: [-screenWidth, -screenWidth, 0],
+      extrapolate: "clamp",
+    }),
+    [dragTranslate, screenWidth],
+  );
+  const nextPageTranslate = useMemo(
+    () => dragTranslate.interpolate({
+      inputRange: [-screenWidth, 0, screenWidth],
+      outputRange: [0, screenWidth, screenWidth],
+      extrapolate: "clamp",
+    }),
+    [dragTranslate, screenWidth],
+  );
 
   const dragOpacity = useMemo(
     () =>
@@ -429,24 +504,30 @@ export function ReaderScreen({
       if (canTurn && committed) {
         pageAnimatingRef.current = true;
         const next = pageIndex + direction;
-        Animated.parallel([
-          Animated.timing(dragTranslate, {
-            toValue: direction * -screenWidth,
-            duration: 150,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pageOpacity, {
-            toValue: 1,
-            duration: 150,
-            useNativeDriver: true,
-          }),
-        ]).start(({ finished }) => {
-          if (finished) {
-            finishPageChange(next, direction * screenWidth * 0.1, 0.98);
-          } else {
-            pageAnimatingRef.current = false;
-          }
+        pageRuntimeRef.current = {
+          bookKey: pageBookKey,
+          currentIndex: pageIndex,
+          phase: "settling",
+          targetIndex: next,
+        };
+        const remaining = 1 - Math.min(Math.abs(translationX) / screenWidth, 1);
+        const duration = Math.max(110, Math.min(230, Math.round(remaining * 220)));
+        pageOpacity.setValue(1);
+        Animated.timing(dragTranslate, {
+          duration,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+          toValue: direction * -screenWidth,
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (finished) finishPageChange(next);
+          else {
+          pageAnimatingRef.current = false;
+          pageRuntimeRef.current = {
+            bookKey: pageBookKey,
+            currentIndex: pageIndex,
+            phase: "ready",
+          };
+        }
         });
         return;
       }
@@ -475,6 +556,26 @@ export function ReaderScreen({
     () => Animated.multiply(pageOpacity, dragOpacity),
     [dragOpacity, pageOpacity],
   );
+  const renderParagraphNodes = (items: string[], index: number, selectable = false) =>
+    items.map((paragraph, paragraphIndex) => (
+      <Text
+        key={`${index}-${paragraphIndex}`}
+        selectable={selectable}
+        style={[
+          styles.paragraph,
+          {
+            color: palette.text,
+            fontSize: preferences.fontSize,
+            lineHeight: preferences.fontSize * preferences.lineHeight,
+            marginBottom: preferences.paragraphSpacing,
+            textAlign: preferences.textAlignment,
+          },
+        ]}
+      >
+        {paragraph}
+      </Text>
+    ));
+
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={[styles.safeArea, { backgroundColor: palette.background }]}>
       <View style={styles.container}>
@@ -561,15 +662,43 @@ export function ReaderScreen({
           onGestureEvent={onGestureEvent}
           onHandlerStateChange={onGestureStateChange}
         >
-          <Animated.View
-            style={[
-              styles.page,
-              {
-                opacity: combinedPageOpacity,
-                transform: [{ translateX: pageTranslate }],
-              },
-            ]}
-          >
+          <Animated.View style={styles.page}>
+          {pageIndex > 0 && preferences.pageTurn !== "none" ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.adjacentPage,
+                styles.pageContent,
+                {
+                  left: (screenWidth - readingColumnWidth) / 2,
+                  paddingHorizontal: preferences.horizontalPadding,
+                  width: readingColumnWidth,
+                  transform: [{ translateX: previousPageTranslate }],
+                },
+              ]}
+            >
+              {renderParagraphNodes(previousParagraphs, pageIndex - 1)}
+            </Animated.View>
+          ) : null}
+
+          {pageIndex < book.pages.length - 1 && preferences.pageTurn !== "none" ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.adjacentPage,
+                styles.pageContent,
+                {
+                  left: (screenWidth - readingColumnWidth) / 2,
+                  paddingHorizontal: preferences.horizontalPadding,
+                  width: readingColumnWidth,
+                  transform: [{ translateX: nextPageTranslate }],
+                },
+              ]}
+            >
+              {renderParagraphNodes(nextParagraphs, pageIndex + 1)}
+            </Animated.View>
+          ) : null}
+
           <Animated.ScrollView
             contentContainerStyle={[
               styles.pageContent,
@@ -579,36 +708,14 @@ export function ReaderScreen({
             style={[
               styles.readingColumn,
               {
+                opacity: combinedPageOpacity,
                 width: readingColumnWidth,
-                transform: [
-                  {
-                    translateY: controlsOpacity.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, 32],
-                    }),
-                  },
-                ],
+                transform: [{ translateX: pageTranslate }],
               },
             ]}
           >
-            {paragraphs.map((paragraph, index) => (
-              <Text
-                key={`${pageIndex}-${index}`}
-                selectable
-                style={[
-                  styles.paragraph,
-                  {
-                    color: palette.text,
-                    fontSize: preferences.fontSize,
-                    lineHeight: preferences.fontSize * preferences.lineHeight,
-                    marginBottom: preferences.paragraphSpacing,
-                    textAlign: preferences.textAlignment,
-                  },
-                ]}
-              >
-                {paragraph}
-              </Text>
-            ))}
+            {renderParagraphNodes(paragraphs, pageIndex, true)}
+
           </Animated.ScrollView>
 
           {preferences.tapToTurn ? (
@@ -816,6 +923,13 @@ export function ReaderScreen({
   );
 }
 
+function splitReaderParagraphs(page: string) {
+  return page
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
@@ -847,6 +961,7 @@ const styles = StyleSheet.create({
   chapterTitle: { fontSize: 11, marginTop: 3 },
   page: { flex: 1, overflow: "hidden" },
   readingColumn: { alignSelf: "center", flex: 1 },
+  adjacentPage: { bottom: 0, position: "absolute", top: 0 },
   pageContent: { minHeight: "100%", paddingBottom: 96, paddingTop: 34 },
   paragraph: { fontFamily: "serif", letterSpacing: 0.25 },
   leftTapArea: {

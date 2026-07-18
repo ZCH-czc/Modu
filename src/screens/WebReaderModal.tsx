@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   Ionicons } from "@expo/vector-icons";
 import { useCallback,
@@ -10,7 +11,6 @@ import {
   Animated as RNAnimated,
   BackHandler,
   Easing,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -18,8 +18,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Text, TextInput } from "../i18n";
-import Animated, { FadeIn, FadeOut, SlideInDown } from "react-native-reanimated";
+import { Text, TextInput, useI18n } from "../i18n";
+import Animated, { FadeIn, FadeOut, SlideInDown, SlideInRight, SlideOutRight } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   PanGestureHandler,
@@ -35,6 +35,11 @@ import {
 
 import { useAppAlert } from "../components/AppDialog";
 import type { WebChapterExtraction, WebPageExtraction, WebReaderFlow } from "../types";
+
+type WebVisit = { url: string; title: string; visitedAt: number };
+type BrowserPanel = "history" | undefined;
+const WEB_HISTORY_KEY = "modu.web-history.v1";
+const WEB_FAVORITES_KEY = "modu.web-favorites.v1";
 
 type ContinuousCapture = {
   author?: string;
@@ -71,11 +76,17 @@ const EXTRACTION_SCRIPT = "\n(function () {\n  try {\n    if (!/^https?:$/.test(
 
 export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtraction, webReaderFlow, onWebReaderFlowChange }: Props) {
   const Alert = useAppAlert();
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const webRef = useRef<WebView>(null);
   const [address, setAddress] = useState("");
   const [url, setUrl] = useState<string>();
   const [currentUrl, setCurrentUrl] = useState("");
+  const [currentTitle, setCurrentTitle] = useState("");
+  const [webHistory, setWebHistory] = useState<WebVisit[]>([]);
+  const [webFavorites, setWebFavorites] = useState<WebVisit[]>([]);
+  const [addressFocused, setAddressFocused] = useState(false);
+  const [browserPanel, setBrowserPanel] = useState<BrowserPanel>();
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -99,6 +110,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   const readerPageAnimatingRef=useRef(false);
   const readerPageTargetRef=useRef<"start"|"end">("start");
   const readerRequestRef=useRef(false);
+  const extractionActionRef=useRef<"read"|"save"|undefined>(undefined);
   const readerNavigationRef=useRef(false);
   const readerScrollRef=useRef<ScrollView>(null);
   const {width:screenWidth,height:screenHeight}=useWindowDimensions();
@@ -108,6 +120,67 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   const readerPages=useMemo(()=>paginateReaderContent(preview?.content??"",readerPageLimit),[preview?.content,readerPageLimit]);
 
   const source = useMemo(() => (url ? { uri: url } : { html: START_HTML }), [url]);
+  const suggestions = useMemo(() => {
+    const query = address.trim().toLocaleLowerCase();
+    if (!query) return [];
+    const merged = [...webFavorites, ...webHistory];
+    const seen = new Set<string>();
+    return merged.filter((item) => {
+      if (seen.has(item.url)) return false;
+      seen.add(item.url);
+      return item.url.toLocaleLowerCase().includes(query) || item.title.toLocaleLowerCase().includes(query);
+    }).slice(0, 6);
+  }, [address, webFavorites, webHistory]);
+  const isFavorite = Boolean(currentUrl && webFavorites.some((item) => item.url === currentUrl));
+
+  useEffect(() => {
+    Promise.all([AsyncStorage.getItem(WEB_HISTORY_KEY), AsyncStorage.getItem(WEB_FAVORITES_KEY)])
+      .then(([historyValue, favoritesValue]) => {
+        if (historyValue) setWebHistory(JSON.parse(historyValue));
+        if (favoritesValue) setWebFavorites(JSON.parse(favoritesValue));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const recordVisit = useCallback((target: string, title?: string) => {
+    if (!/^https?:\/\//i.test(target)) return;
+    setWebHistory((current) => {
+      const next = [{ url: target, title: title?.trim() || target, visitedAt: Date.now() }, ...current.filter((item) => item.url !== target)].slice(0, 80);
+      void AsyncStorage.setItem(WEB_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const openAddress = useCallback((target: string) => {
+    setAddressFocused(false);
+    setBrowserPanel(undefined);
+    setAddress(target);
+    setPreview(undefined);
+    if (target === url) webRef.current?.reload();
+    else setUrl(target);
+  }, [url]);
+
+  const openHome = useCallback(() => {
+    setUrl(undefined);
+    setCurrentUrl("");
+    setCurrentTitle("");
+    setAddress("");
+    setPreview(undefined);
+    setBrowserPanel(undefined);
+    setAddressFocused(false);
+  }, []);
+
+  const toggleFavorite = useCallback(() => {
+    if (!currentUrl) return;
+    setWebFavorites((current) => {
+      const exists = current.some((item) => item.url === currentUrl);
+      const next = exists
+        ? current.filter((item) => item.url !== currentUrl)
+        : [{ url: currentUrl, title: currentTitle || currentUrl, visitedAt: Date.now() }, ...current];
+      void AsyncStorage.setItem(WEB_FAVORITES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [currentTitle, currentUrl]);
 
   useEffect(() => {
     if (!visible) return;
@@ -150,12 +223,11 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
     setCapturing(false);
     const target = normalizeAddress(address);
     if (!target) return;
-    setPreview(undefined);
-    if (target === url) webRef.current?.reload();
-    else setUrl(target);
+    openAddress(target);
   };
 
   const closeOrGoBack = () => {
+    if(browserPanel){setBrowserPanel(undefined);return;}
     if(readerPanel){setReaderPanel(undefined);return;}
     if(readerMode){
       readerRequestRef.current=false;
@@ -176,12 +248,14 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
       return true;
     });
     return () => subscription.remove();
-  }, [canGoBack, onClose, preview, readerMode, readerPanel, visible]);
+  }, [browserPanel, canGoBack, onClose, preview, readerMode, readerPanel, visible]);
 
   const handleNavigation = (state: WebViewNavigation) => {
     setCanGoBack(state.canGoBack);
     setCanGoForward(state.canGoForward);
     setLoading(state.loading);
+    setCurrentTitle(state.title || state.url);
+    if (!state.loading) recordVisit(state.url, state.title);
     if (/^https?:\/\//i.test(state.url)) {
       setCurrentUrl(state.url);
       setAddress(state.url);
@@ -228,10 +302,18 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
         if(!session){
           const payload=message.payload;
           const navigating=readerNavigationRef.current;
-          const open=readerRequestRef.current||navigating||readerMode;
+          const action=extractionActionRef.current;
+          extractionActionRef.current=undefined;
+          const open=action==="read"||readerRequestRef.current||navigating||readerMode;
           readerRequestRef.current=false;
           readerNavigationRef.current=false;
           setReaderLoading(false);
+          if(action==="save"){
+            void onAdd(payload).then(()=>{savedBookRef.current=true;}).catch(()=>Alert.alert("收藏失败", "暂时无法把这个网页加入书架。")).finally(()=>setSaving(false));
+            setPreview(undefined);
+            return;
+          }
+          setSaving(false);
           setPreview(payload);
           if(open){
             if(navigating){
@@ -272,7 +354,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
           finishContinuousCapture();
         }
       } else if (message.type === "modu-extraction-error") {
-        readerRequestRef.current=false; readerNavigationRef.current=false; setReaderLoading(false);
+        readerRequestRef.current=false; readerNavigationRef.current=false; extractionActionRef.current=undefined; setSaving(false); setReaderLoading(false);
         if (captureRef.current?.chapters.length) {
           finishContinuousCapture();
           Alert.alert("连续收录已停止", message.message || "后续页面未识别到正文，已保留前面的章节。");
@@ -281,15 +363,17 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
         }
       }
     } catch {
-      readerRequestRef.current=false; readerNavigationRef.current=false; setReaderLoading(false);
+      readerRequestRef.current=false; readerNavigationRef.current=false; extractionActionRef.current=undefined; setSaving(false); setReaderLoading(false);
       if (captureRef.current?.chapters.length) finishContinuousCapture();
       else Alert.alert("提取失败", "页面返回了无法识别的内容。");
     }
   };
 
-  const extract = (openReader=false) => {
-    if (!currentUrl || loading || extracting) return;
-    readerRequestRef.current=openReader;
+  const extract = (action: "read" | "save") => {
+    if (!currentUrl || loading || extracting || saving) return;
+    extractionActionRef.current=action;
+    readerRequestRef.current=action==="read";
+    if(action==="save") setSaving(true);
     setExtracting(true);
     webRef.current?.injectJavaScript(EXTRACTION_SCRIPT);
   };
@@ -442,8 +526,11 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   if (!visible) return null;
 
   return (
-    <Modal animationType="slide" onRequestClose={closeOrGoBack} statusBarTranslucent visible>
-      <View style={styles.overlay}>
+    <Animated.View
+      entering={SlideInRight.duration(280)}
+      exiting={SlideOutRight.duration(250)}
+      style={styles.overlay}
+    >
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <View style={styles.brand}>
@@ -466,7 +553,9 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
+              onBlur={() => setTimeout(() => setAddressFocused(false), 140)}
               onChangeText={setAddress}
+              onFocus={() => setAddressFocused(true)}
               onSubmitEditing={navigate}
               placeholder="输入网址、书名或作者"
               placeholderTextColor="#A6A39C"
@@ -481,13 +570,30 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
           </Pressable>
         </View>
 
+        {addressFocused && suggestions.length ? (
+          <View style={styles.suggestions}>
+            {suggestions.map((item) => (
+              <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.suggestionItem}>
+                <Ionicons color="#6E8176" name={webFavorites.some((favorite) => favorite.url === item.url) ? "star" : "time-outline"} size={16} />
+                <View style={styles.suggestionCopy}>
+                  <Text numberOfLines={1} style={styles.suggestionTitle}>{item.title}</Text>
+                  <Text numberOfLines={1} style={styles.suggestionUrl}>{item.url}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+
         <View style={styles.browser}>
+          {url ? (
           <WebView
+            accessibilityElementsHidden={!url}
             allowFileAccess={false}
             allowUniversalAccessFromFileURLs={false}
             androidLayerType="hardware"
             cacheEnabled
             domStorageEnabled
+            importantForAccessibility={!url ? "no-hide-descendants" : "auto"}
             javaScriptCanOpenWindowsAutomatically={false}
             javaScriptEnabled
             key={webViewKey}
@@ -522,9 +628,83 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
             setSupportMultipleWindows={false}
             sharedCookiesEnabled
             source={source}
+            style={!url ? styles.hiddenWebView : undefined}
             startInLoadingState
             thirdPartyCookiesEnabled
           />
+          ) : null}
+          {!url ? (
+            <ScrollView contentContainerStyle={styles.browserHome} showsVerticalScrollIndicator={false} style={styles.browserHomeLayer}>
+              <View style={styles.homeHero}>
+                <View style={styles.homeMark}><Ionicons color="#4F705E" name="compass-outline" size={27} /></View>
+                <Text style={styles.homeTitle}>在网页中寻找下一本书</Text>
+                <Text style={styles.homeSubtitle}>输入网址、书名或作者，阅读和收藏由你决定</Text>
+              </View>
+              <View style={styles.homeSectionHeader}>
+                <Text style={styles.homeSectionTitle}>收藏网页</Text>
+                <Text style={styles.homeSectionCount}>{webFavorites.length} 个</Text>
+              </View>
+              {webFavorites.length ? (
+                <View style={styles.favoriteGrid}>
+                  {webFavorites.map((item) => (
+                    <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.favoriteCard}>
+                      <View style={styles.favoriteIcon}><Ionicons color="#4E6D5D" name="star" size={18} /></View>
+                      <Text numberOfLines={2} style={styles.favoriteTitle}>{item.title}</Text>
+                      <Text numberOfLines={1} style={styles.favoriteHost}>{safeHost(item.url)}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.homeEmpty}>
+                  <Ionicons color="#A4AAA4" name="star-outline" size={22} />
+                  <Text style={styles.homeEmptyText}>收藏常用小说网站，它们会显示在这里</Text>
+                </View>
+              )}
+              {webHistory.length ? (
+                <>
+                  <View style={styles.homeSectionHeader}>
+                    <Text style={styles.homeSectionTitle}>最近访问</Text>
+                    <Pressable onPress={() => setBrowserPanel("history")}><Text style={styles.homeHistoryLink}>查看全部</Text></Pressable>
+                  </View>
+                  {webHistory.slice(0, 4).map((item) => (
+                    <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.homeRecentItem}>
+                      <Ionicons color="#78877E" name="time-outline" size={16} />
+                      <Text numberOfLines={1} style={styles.homeRecentTitle}>{item.title}</Text>
+                      <Ionicons color="#ADB1AC" name="chevron-forward" size={15} />
+                    </Pressable>
+                  ))}
+                </>
+              ) : null}
+            </ScrollView>
+          ) : null}
+          {browserPanel === "history" ? (
+            <View style={styles.historyPanel}>
+              <View style={styles.historyHeader}>
+                <View>
+                  <Text style={styles.historyTitle}>浏览历史</Text>
+                  <Text style={styles.historySubtitle}>历史记录仅保存在本机</Text>
+                </View>
+                <Pressable onPress={() => setBrowserPanel(undefined)} style={styles.historyClose}><Ionicons color="#52655A" name="close" size={19} /></Pressable>
+              </View>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {webHistory.length ? webHistory.map((item) => (
+                  <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.historyItem}>
+                    <View style={styles.historyIcon}><Ionicons color="#6A7F73" name="globe-outline" size={16} /></View>
+                    <View style={styles.historyCopy}>
+                      <Text numberOfLines={1} style={styles.historyItemTitle}>{item.title}</Text>
+                      <Text numberOfLines={1} style={styles.historyItemUrl}>{item.url}</Text>
+                    </View>
+                  </Pressable>
+                )) : <Text style={styles.historyEmpty}>还没有浏览历史</Text>}
+              </ScrollView>
+              {webHistory.length ? (
+                <Pressable onPress={() => { setWebHistory([]); void AsyncStorage.removeItem(WEB_HISTORY_KEY); }} style={styles.clearHistoryButton}>
+                  <Ionicons color="#9B5F58" name="trash-outline" size={16} />
+                  <Text style={styles.clearHistoryText}>清除浏览历史</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
           {loading ? (
             <Animated.View entering={FadeIn.duration(100)} exiting={FadeOut.duration(100)} style={styles.loadingLine} />
           ) : null}
@@ -532,24 +712,32 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
 
         <View style={styles.toolbar}>
           <View style={styles.navButtons}>
+            <ToolButton icon="home-outline" onPress={openHome} />
             <ToolButton disabled={!canGoBack} icon="arrow-back" onPress={() => webRef.current?.goBack()} />
             <ToolButton disabled={!canGoForward} icon="arrow-forward" onPress={() => webRef.current?.goForward()} />
-            <ToolButton icon="refresh" onPress={() => webRef.current?.reload()} />
+            <ToolButton icon="time-outline" onPress={() => setBrowserPanel(browserPanel === "history" ? undefined : "history")} />
+            <ToolButton disabled={!currentUrl} icon={isFavorite ? "star" : "star-outline"} onPress={toggleFavorite} />
           </View>
-          <Pressable
-            disabled={!capturing && (!currentUrl || loading || extracting)}
-            onPress={capturing ? finishContinuousCapture : () => extract(true)}
-            style={[styles.extractButton, (!capturing && (!currentUrl || loading)) && styles.buttonDisabled]}
-          >
-            {extracting && !capturing ? (
-              <ActivityIndicator color="#F8F4EA" size="small" />
-            ) : (
-              <Ionicons color="#F8F4EA" name={capturing ? "stop-circle-outline" : "book-outline"} size={17} />
-            )}
-            <Text style={styles.extractText}>
-              {capturing ? "已收录 " + captureCount + " 章 · 停止" : extracting ? "正在整理" : "阅读模式"}
-            </Text>
-          </Pressable>
+          <View style={styles.browserActions}>
+            <Pressable
+              accessibilityLabel="收藏到书架"
+              disabled={!currentUrl || loading || extracting || saving || capturing}
+              onPress={() => extract("save")}
+              style={[styles.saveWebButton, (!currentUrl || loading || extracting || saving || capturing) && styles.buttonDisabled]}
+            >
+              {saving ? <ActivityIndicator color="#426753" size="small" /> : <Ionicons color="#426753" name="bookmark-outline" size={17} />}
+              <Text style={styles.saveWebText}>收藏</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="阅读模式"
+              disabled={!capturing && (!currentUrl || loading || extracting || saving)}
+              onPress={capturing ? finishContinuousCapture : () => extract("read")}
+              style={[styles.extractButton, (!capturing && (!currentUrl || loading || saving)) && styles.buttonDisabled]}
+            >
+              {extracting && !capturing && !saving ? <ActivityIndicator color="#F8F4EA" size="small" /> : <Ionicons color="#F8F4EA" name={capturing ? "stop-circle-outline" : "book-outline"} size={17} />}
+              <Text style={styles.extractText}>{capturing ? "停止" : extracting && !saving ? "整理中" : "阅读"}</Text>
+            </Pressable>
+          </View>
         </View>
 
         {preview && !readerMode ? (
@@ -604,7 +792,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                 <View style={{alignSelf:"center",width:readerColumnWidth}}>
                   <Text style={[styles.readerEyebrow,{color:readerPalette.accent}]}>WEB READER</Text>
                   <Text style={[styles.readerTitle,{color:readerPalette.text}]}>{preview.title}</Text>
-                  <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{preview.author||"摘自当前网页"} · 第 {readerIndex+1} 章</Text>
+                  <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{t("{source} · 第 {chapter} 章", { source: preview.author || t("摘自当前网页"), chapter: readerIndex + 1 })}</Text>
                   <View style={[styles.readerRule,{backgroundColor:`${readerPalette.muted}35`}]}/>
                   {preview.content.split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean).map((paragraph,index)=>(
                     <Text key={preview.url+"-"+index} selectable style={[styles.readerParagraph,{color:readerPalette.text,fontSize:readerFontSize,lineHeight:readerFontSize*1.82}]}>
@@ -631,7 +819,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                       <>
                         <Text style={[styles.readerEyebrow,{color:readerPalette.accent}]}>WEB READER</Text>
                         <Text style={[styles.readerTitle,{color:readerPalette.text}]}>{preview.title}</Text>
-                        <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{preview.author||"摘自当前网页"} · 第 {readerIndex+1} 章</Text>
+                        <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{t("{source} · 第 {chapter} 章", { source: preview.author || t("摘自当前网页"), chapter: readerIndex + 1 })}</Text>
                         <View style={[styles.readerRule,{backgroundColor:`${readerPalette.muted}35`}]}/>
                       </>
                     ) : (
@@ -761,8 +949,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
           </Animated.View>
         ) : null}
       </SafeAreaView>
-      </View>
-    </Modal>
+    </Animated.View>
   );
 }
 
@@ -805,6 +992,10 @@ function paginateReaderContent(content:string,limit:number){
   return pages.length?pages:[""];
 }
 
+function safeHost(value: string) {
+  try { return new URL(value).hostname.replace(/^www\./, ""); } catch { return value; }
+}
+
 function normalizeAddress(value: string) {
   const input = value.trim();
   if (!input) return undefined;
@@ -826,7 +1017,45 @@ const styles = StyleSheet.create({
   addressBox: { flex: 1, height: 48, borderRadius: 17, backgroundColor: "#ECEAE3", flexDirection: "row", alignItems: "center", paddingHorizontal: 14, gap: 8 },
   addressInput: { flex: 1, color: "#2D3832", fontSize: 14, paddingVertical: 0 },
   goButton: { width: 48, height: 48, borderRadius: 17, backgroundColor: "#426753", alignItems: "center", justifyContent: "center" },
+  suggestions: { backgroundColor: "#FBF9F4", borderColor: "#D8DDD7", borderRadius: 18, borderWidth: 1, elevation: 12, left: 16, maxHeight: 330, overflow: "hidden", position: "absolute", right: 73, shadowColor: "#26352D", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.16, shadowRadius: 18, top: 122, zIndex: 40 },
+  suggestionItem: { alignItems: "center", borderBottomColor: "#E7E5DE", borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 11, minHeight: 58, paddingHorizontal: 14 },
+  suggestionCopy: { flex: 1, minWidth: 0 },
+  suggestionTitle: { color: "#344139", fontSize: 13, fontWeight: "700" },
+  suggestionUrl: { color: "#969991", fontSize: 10, marginTop: 3 },
+  hiddenWebView: { opacity: 0 },
   browser: { flex: 1, overflow: "hidden", borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DDD9D0", backgroundColor: "#FFFFFF" },
+  browserHomeLayer: { ...StyleSheet.absoluteFill, backgroundColor: "#F7F4ED", zIndex: 20 },
+  browserHome: { backgroundColor: "#F7F4ED", flexGrow: 1, padding: 20, paddingBottom: 36 },
+  homeHero: { alignItems: "center", paddingBottom: 28, paddingTop: 18 },
+  homeMark: { alignItems: "center", backgroundColor: "#E5EDE7", borderRadius: 23, height: 62, justifyContent: "center", width: 62 },
+  homeTitle: { color: "#29372F", fontSize: 21, fontWeight: "800", marginTop: 17, textAlign: "center" },
+  homeSubtitle: { color: "#898D87", fontSize: 12, lineHeight: 19, marginTop: 7, textAlign: "center" },
+  homeSectionHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 11, marginTop: 18 },
+  homeSectionTitle: { color: "#344239", fontSize: 15, fontWeight: "800" },
+  homeSectionCount: { color: "#999C96", fontSize: 11 },
+  favoriteGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  favoriteCard: { backgroundColor: "#FEFCF7", borderColor: "#DCE1DB", borderRadius: 18, borderWidth: 1, minHeight: 116, padding: 14, width: "48%" },
+  favoriteIcon: { alignItems: "center", backgroundColor: "#E7EEE9", borderRadius: 12, height: 32, justifyContent: "center", width: 32 },
+  favoriteTitle: { color: "#334139", fontSize: 13, fontWeight: "700", lineHeight: 18, marginTop: 10 },
+  favoriteHost: { color: "#9A9C97", fontSize: 9.5, marginTop: 5 },
+  homeEmpty: { alignItems: "center", backgroundColor: "#FDFBF6", borderColor: "#D8DDD7", borderRadius: 18, borderStyle: "dashed", borderWidth: 1, flexDirection: "row", gap: 10, minHeight: 62, paddingHorizontal: 16 },
+  homeEmptyText: { color: "#8B918B", flex: 1, fontSize: 12 },
+  homeHistoryLink: { color: "#52715F", fontSize: 11, fontWeight: "700" },
+  homeRecentItem: { alignItems: "center", borderBottomColor: "#E4E2DB", borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 10, minHeight: 48 },
+  homeRecentTitle: { color: "#58625C", flex: 1, fontSize: 12 },
+  historyPanel: { ...StyleSheet.absoluteFill, backgroundColor: "#F8F5EE", padding: 18, zIndex: 25 },
+  historyHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+  historyTitle: { color: "#2D3932", fontSize: 20, fontWeight: "800" },
+  historySubtitle: { color: "#999B96", fontSize: 10.5, marginTop: 4 },
+  historyClose: { alignItems: "center", backgroundColor: "#E8ECE7", borderRadius: 15, height: 38, justifyContent: "center", width: 38 },
+  historyItem: { alignItems: "center", borderBottomColor: "#E2E0DA", borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 11, minHeight: 62 },
+  historyIcon: { alignItems: "center", backgroundColor: "#E8EDE9", borderRadius: 13, height: 36, justifyContent: "center", width: 36 },
+  historyCopy: { flex: 1, minWidth: 0 },
+  historyItemTitle: { color: "#3B4740", fontSize: 13, fontWeight: "700" },
+  historyItemUrl: { color: "#999C97", fontSize: 10, marginTop: 4 },
+  historyEmpty: { color: "#999C97", marginTop: 60, textAlign: "center" },
+  clearHistoryButton: { alignItems: "center", borderColor: "#D9C7C3", borderRadius: 16, borderWidth: 1, flexDirection: "row", gap: 7, justifyContent: "center", marginTop: 12, minHeight: 46 },
+  clearHistoryText: { color: "#9B5F58", fontSize: 13, fontWeight: "700" },
   webError: { alignItems: "center", backgroundColor: "#F7F4ED", flex: 1, justifyContent: "center", padding: 28 },
   webErrorIcon: { alignItems: "center", backgroundColor: "#E7ECE7", borderRadius: 20, height: 58, justifyContent: "center", width: 58 },
   webErrorTitle: { color: "#34443B", fontSize: 18, fontWeight: "700", marginTop: 18 },
@@ -834,13 +1063,16 @@ const styles = StyleSheet.create({
   retryButton: { borderColor: "#6A8174", borderRadius: 16, borderWidth: 1, marginTop: 20, paddingHorizontal: 22, paddingVertical: 11 },
   retryText: { color: "#526C5E", fontSize: 13, fontWeight: "700" },
   loadingLine: { position: "absolute", left: 0, right: "35%", top: 0, height: 2, backgroundColor: "#557967" },
-  toolbar: { minHeight: Platform.OS === "android" ? 76 : 70, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FBF9F4" },
-  navButtons: { flexDirection: "row", gap: 8 },
-  toolButton: { width: 43, height: 43, borderRadius: 16, backgroundColor: "#ECEFEA", alignItems: "center", justifyContent: "center" },
+  toolbar: { minHeight: Platform.OS === "android" ? 76 : 70, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FBF9F4" },
+  navButtons: { flexDirection: "row", gap: 4 },
+  toolButton: { width: 38, height: 42, borderRadius: 15, backgroundColor: "#ECEFEA", alignItems: "center", justifyContent: "center" },
   toolDisabled: { backgroundColor: "#F0EEE8" },
-  extractButton: { minWidth: 128, height: 46, borderRadius: 18, backgroundColor: "#426753", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 17 },
-  buttonDisabled: { backgroundColor: "#AAB8B0" },
-  extractText: { color: "#F8F4EA", fontSize: 14, fontWeight: "700" },
+  browserActions: { flexDirection: "row", gap: 6 },
+  saveWebButton: { alignItems: "center", backgroundColor: "#E8EEE9", borderColor: "#CBD7CF", borderRadius: 17, borderWidth: 1, flexDirection: "row", gap: 5, height: 44, justifyContent: "center", minWidth: 66, paddingHorizontal: 9 },
+  saveWebText: { color: "#426753", fontSize: 12, fontWeight: "800" },
+  extractButton: { minWidth: 70, height: 44, borderRadius: 17, backgroundColor: "#426753", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingHorizontal: 10 },
+  buttonDisabled: { opacity: 0.46 },
+  extractText: { color: "#F8F4EA", fontSize: 12, fontWeight: "800" },
   previewShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(30,37,33,0.36)", justifyContent: "flex-end" },
   previewCard: { backgroundColor: "#FBF9F4", borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 22, paddingBottom: 28 },
   previewHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: "#D4D0C7", alignSelf: "center", marginBottom: 20 },

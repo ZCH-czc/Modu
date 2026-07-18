@@ -3,16 +3,18 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { memo,
   useCallback,
-  useMemo } from "react";
+  useMemo,
+  useState } from "react";
 import { FlatList,
   Pressable,
   StyleSheet,
   useWindowDimensions,
   View,
 } from "react-native";
-import { Text } from "../i18n";
+import { Text, TextInput } from "../i18n";
 import type { DimensionValue } from "react-native";
 
+import { IOSPopupModal } from "../components/IOSPopupModal";
 import type { Book } from "../types";
 
 type HomeShelfProps = {
@@ -23,6 +25,7 @@ type HomeShelfProps = {
   onOnline: () => void;
   onOpen: (book: Book) => void;
   onRemove: (book: Book) => void;
+  onRename: (book: Book, title: string) => Promise<void>;
 };
 
 type ShelfListItem =
@@ -44,8 +47,28 @@ export function HomeShelf({
   onOnline,
   onOpen,
   onRemove,
+  onRename,
 }: HomeShelfProps) {
   const { width } = useWindowDimensions();
+  const [renameBook, setRenameBook] = useState<Book>();
+  const [renameVisible, setRenameVisible] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const beginRename = useCallback((book: Book) => {
+    setRenameBook(book);
+    setRenameValue(book.title);
+    setRenameVisible(true);
+  }, []);
+  const finishRename = useCallback(async () => {
+    if (!renameBook || !renameValue.trim() || renaming) return;
+    setRenaming(true);
+    try {
+      await onRename(renameBook, renameValue);
+      setRenameVisible(false);
+    } finally {
+      setRenaming(false);
+    }
+  }, [onRename, renameBook, renameValue, renaming]);
   const isTablet = width >= 700;
   const columns = width >= 1120 ? 3 : isTablet ? 2 : 1;
   const contentWidth = Math.min(width, 1180);
@@ -76,11 +99,12 @@ export function HomeShelf({
           isTablet={isTablet}
           onOpen={onOpen}
           onRemove={onRemove}
+          onRename={beginRename}
         />
       ) : (
         <ImportCard cardWidth={cardWidth} onImport={onImport} />
       ),
-    [cardWidth, isTablet, onImport, onOpen, onRemove],
+    [beginRename, cardWidth, isTablet, onImport, onOpen, onRemove],
   );
 
   return (
@@ -180,6 +204,35 @@ export function HomeShelf({
         updateCellsBatchingPeriod={32}
         windowSize={6}
       />
+
+      <IOSPopupModal
+        onDismiss={() => setRenameBook(undefined)}
+        onRequestClose={() => setRenameVisible(false)}
+        visible={renameVisible}
+      >
+          <View style={styles.renameCard}>
+            <View style={styles.renameIcon}><Ionicons name="create-outline" color="#486555" size={21} /></View>
+            <Text style={styles.renameTitle}>修改藏书名称</Text>
+            <Text style={styles.renameHint}>为这本书取一个更容易辨认的名字</Text>
+            <TextInput
+              autoFocus
+              maxLength={120}
+              onChangeText={setRenameValue}
+              onSubmitEditing={() => void finishRename()}
+              placeholder="输入新的名称"
+              returnKeyType="done"
+              selectTextOnFocus
+              style={styles.renameInput}
+              value={renameValue}
+            />
+            <View style={styles.renameActions}>
+              <Pressable onPress={() => setRenameVisible(false)} style={styles.renameCancel}><Text style={styles.renameCancelText}>取消</Text></Pressable>
+              <Pressable disabled={!renameValue.trim() || renaming} onPress={() => void finishRename()} style={[styles.renameSave, (!renameValue.trim() || renaming) && styles.renameDisabled]}>
+                <Text style={styles.renameSaveText}>{renaming ? "正在保存…" : "保存"}</Text>
+              </Pressable>
+            </View>
+          </View>
+      </IOSPopupModal>
     </View>
   );
 }
@@ -191,6 +244,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
   isTablet,
   onOpen,
   onRemove,
+  onRename,
 }: {
   book: Book;
   cardWidth: number;
@@ -198,6 +252,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
   isTablet: boolean;
   onOpen: (book: Book) => void;
   onRemove: (book: Book) => void;
+  onRename: (book: Book) => void;
 }) {
   const openBook = useCallback(() => onOpen(book), [book, onOpen]);
   const progress = Math.max(0, Math.min(book.progress, 100));
@@ -209,7 +264,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
         accessibilityLabel={
           book.title + "，" + book.author + "，阅读进度 " + Math.round(progress) + "%"
         }
-        onLongPress={() => onRemove(book)}
+        onLongPress={() => book.format !== "sample" && onRename(book)}
         onPress={openBook}
         style={({ pressed }) => [
           styles.card,
@@ -264,17 +319,32 @@ const ShelfBookCard = memo(function ShelfBookCard({
           </View>
         </View>
 
-        <Pressable
-          accessibilityLabel={"移除" + book.title}
-          hitSlop={8}
-          onPress={(event) => {
-            event.stopPropagation();
-            onRemove(book);
-          }}
-          style={styles.removeButton}
-        >
-          <Ionicons name="trash-outline" color="#65786D" size={15} />
-        </Pressable>
+        <View style={styles.cardActions}>
+          {book.format !== "sample" ? (
+            <Pressable
+              accessibilityLabel={"重命名" + book.title}
+              hitSlop={6}
+              onPress={(event) => {
+                event.stopPropagation();
+                onRename(book);
+              }}
+              style={styles.cardActionButton}
+            >
+              <Ionicons name="create-outline" color="#65786D" size={15} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel={"移除" + book.title}
+            hitSlop={6}
+            onPress={(event) => {
+              event.stopPropagation();
+              onRemove(book);
+            }}
+            style={styles.cardActionButton}
+          >
+            <Ionicons name="trash-outline" color="#65786D" size={15} />
+          </Pressable>
+        </View>
       </Pressable>
     </View>
   );
@@ -522,7 +592,7 @@ const styles = StyleSheet.create({
     top: 8,
   },
   formatText: { color: "#F7F0E1C7", fontSize: 6.5, fontWeight: "900", letterSpacing: 0.6 },
-  bookInfo: { flex: 1, justifyContent: "space-between", minWidth: 0, paddingLeft: 14, paddingRight: 24, paddingVertical: 3 },
+  bookInfo: { flex: 1, justifyContent: "space-between", minWidth: 0, paddingLeft: 14, paddingRight: 48, paddingVertical: 3 },
   bookTitle: { color: "#29312C", fontSize: 16, fontWeight: "900" },
   author: { color: "#838881", fontSize: 11, marginTop: 4 },
   chapterRow: {
@@ -551,7 +621,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   progressFill: { backgroundColor: "#607D6D", borderRadius: 2, height: "100%" },
-  removeButton: {
+  cardActions: { gap: 6, position: "absolute", right: 10, top: 10 },
+  cardActionButton: {
     alignItems: "center",
     backgroundColor: "#E8EDE8",
     borderColor: "#D4DDD6",
@@ -559,11 +630,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 32,
     justifyContent: "center",
-    position: "absolute",
-    right: 10,
-    top: 12,
     width: 28,
   },
+  renameBackdrop: { alignItems: "center", backgroundColor: "rgba(25,32,28,0.48)", flex: 1, justifyContent: "center", padding: 26 },
+  renameCard: { backgroundColor: "#FAF8F2", borderColor: "#FFFFFFB8", borderRadius: 26, borderWidth: 1, elevation: 16, maxWidth: 420, padding: 22, width: "100%" },
+  renameIcon: { alignItems: "center", backgroundColor: "#E6EEE8", borderRadius: 16, height: 42, justifyContent: "center", marginBottom: 15, width: 42 },
+  renameTitle: { color: "#272D29", fontSize: 21, fontWeight: "800" },
+  renameHint: { color: "#7C807A", fontSize: 13, marginTop: 7 },
+  renameInput: { backgroundColor: "#F0EEE7", borderColor: "#CCD5CE", borderRadius: 16, borderWidth: 1, color: "#29312C", fontSize: 16, marginTop: 18, minHeight: 52, paddingHorizontal: 16 },
+  renameActions: { flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 18 },
+  renameCancel: { alignItems: "center", backgroundColor: "#ECE9E1", borderRadius: 15, justifyContent: "center", minHeight: 46, paddingHorizontal: 20 },
+  renameCancelText: { color: "#626761", fontSize: 14, fontWeight: "700" },
+  renameSave: { alignItems: "center", backgroundColor: "#3D6653", borderRadius: 15, justifyContent: "center", minHeight: 46, minWidth: 92, paddingHorizontal: 20 },
+  renameSaveText: { color: "#F8F4EA", fontSize: 14, fontWeight: "700" },
+  renameDisabled: { opacity: 0.45 },
   importCard: {
     alignItems: "center",
     backgroundColor: "#F7F5EF",

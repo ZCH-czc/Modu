@@ -59,6 +59,13 @@ function translatePattern(source: string): string | undefined {
   if ((match = source.match(/^移除(.+)$/))) return `Remove ${match[1]}`;
   if ((match = source.match(/^(.+)，(.+)，阅读进度 (\d+)%$/))) return `${match[1]}, ${match[2]}, ${match[3]}% read`;
   if ((match = source.match(/^网络请求失败（HTTP (\d+)）。$/))) return `Network request failed (HTTP ${match[1]}).`;
+  if ((match = source.match(/^章节 (\d+)\/(\d+) · (\d+)\/(\d+)$/))) return `Chapter ${match[1]}/${match[2]} · Page ${match[3]}/${match[4]}`;
+  if ((match = source.match(/^章节 (\d+)\/(\d+)$/))) return `Chapter ${match[1]}/${match[2]}`;
+  if ((match = source.match(/^删除“(.+)”后，书架中来自该书源的书将暂时无法打开。$/))) return `After deleting “${match[1]}”, books from this source will be unavailable until it is restored.`;
+  if ((match = source.match(/^网页验证后请求仍失败（HTTP (\d+)）。$/))) return `The request still failed after web verification (HTTP ${match[1]}).`;
+  if ((match = source.match(/^(\d+) 个书源暂时无法连接$/))) return `${match[1]} sources are temporarily unavailable`;
+  if ((match = source.match(/^全部书源 · (\d+) 个$/))) return `All Sources · ${match[1]}`;
+  if ((match = source.match(/^已导入 · (\d+)$/))) return `Imported · ${match[1]}`;
   return undefined;
 }
 
@@ -67,9 +74,12 @@ export function translate(
   params?: TranslationParams,
   language: ResolvedLanguage = activeLanguage,
 ) {
+  if (language === "zh-CN") return interpolate(source, params);
+  const translated = english[source];
+  if (translated) return interpolate(translated, params);
   const value = interpolate(source, params);
-  if (language === "zh-CN" || !value.trim()) return value;
-  return english[value] ?? translatePattern(value) ?? value;
+  if (!value.trim()) return value;
+  return translatePattern(value) ?? value;
 }
 
 type I18nContextValue = {

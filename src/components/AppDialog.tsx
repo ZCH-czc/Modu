@@ -4,15 +4,15 @@ import { createContext,
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState } from "react";
 import { Keyboard,
-  Modal,
   Pressable,
   StyleSheet,
   View,
 } from "react-native";
 import { Text } from "../i18n";
-import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
+import { IOSPopupModal } from "./IOSPopupModal";
 
 export type AppAlertButton = {
   text?: string;
@@ -35,10 +35,13 @@ const DialogContext = createContext<DialogContextValue | undefined>(undefined);
 
 export function AppDialogProvider({ children }: { children: React.ReactNode }) {
   const [dialog, setDialog] = useState<DialogState>();
+  const [dialogVisible, setDialogVisible] = useState(false);
+  const pendingButton = useRef<AppAlertButton | undefined>(undefined);
 
   const alert = useCallback(
     (title: string, message?: string, buttons?: AppAlertButton[]) => {
       Keyboard.dismiss();
+      setDialogVisible(true);
       setDialog({
         id: Date.now(),
         title,
@@ -51,6 +54,12 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => ({ alert }), [alert]);
   const close = useCallback((button?: AppAlertButton) => {
+    pendingButton.current = button;
+    setDialogVisible(false);
+  }, []);
+  const finishClose = useCallback(() => {
+    const button = pendingButton.current;
+    pendingButton.current = undefined;
     setDialog(undefined);
     if (button?.onPress) requestAnimationFrame(() => void button.onPress?.());
   }, []);
@@ -58,18 +67,13 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
   return (
     <DialogContext.Provider value={value}>
       {children}
-      <Modal
-        animationType="fade"
-        navigationBarTranslucent
-        onRequestClose={() => close()}
-        statusBarTranslucent
-        transparent
-        visible={Boolean(dialog)}
-      >
-        {dialog ? (
-          <Animated.View entering={FadeIn.duration(150)} style={styles.backdrop}>
-            <Pressable onPress={() => close()} style={StyleSheet.absoluteFill} />
-            <Animated.View entering={FadeInDown.duration(220)} key={dialog.id} style={styles.card}>
+      {dialog ? (
+        <IOSPopupModal
+          onDismiss={finishClose}
+          onRequestClose={() => close()}
+          visible={dialogVisible}
+        >
+            <View key={dialog.id} style={styles.card}>
               <View style={styles.iconWrap}>
                 <Ionicons color="#4E6D5D" name="leaf-outline" size={21} />
               </View>
@@ -103,10 +107,9 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
                   );
                 })}
               </View>
-            </Animated.View>
-          </Animated.View>
-        ) : null}
-      </Modal>
+            </View>
+        </IOSPopupModal>
+      ) : null}
     </DialogContext.Provider>
   );
 }

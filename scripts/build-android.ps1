@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
   [ValidatePattern('^\d+\.\d+\.\d+$')]
-  [string]$Version = '1.5.1',
+  [string]$Version = '1.5.2',
 
   [int]$VersionCode = 0,
 
@@ -41,6 +41,26 @@ if (-not (Test-Path -LiteralPath $gradleFile)) {
   throw "未找到 Android 工程：$gradleFile"
 }
 
+# Expo 57 / React Native 0.86 release flags require explicit Android C++ runtime links.
+$nativeCppLinks = @(
+  @{ Path = 'node_modules\react-native-worklets\android\CMakeLists.txt'; Pattern = 'target_link_libraries\(worklets android log (?!c\+\+_shared )'; Replacement = 'target_link_libraries(worklets android log c++_shared ' },
+  @{ Path = 'node_modules\react-native-reanimated\android\CMakeLists.txt'; Pattern = '(?m)^  log\r?\n  ReactAndroid::reactnative$'; Replacement = "  log`n  c++_shared`n  ReactAndroid::reactnative" },
+  @{ Path = 'node_modules\expo-modules-core\android\cmake\main.cmake'; Pattern = '(?m)^  android\r?\n  \$\{JSEXECUTOR_LIB\}$'; Replacement = "  android`n  c++_shared`n  `${JSEXECUTOR_LIB}" },
+  @{ Path = 'node_modules\react-native-gesture-handler\android\src\main\jni\CMakeLists.txt'; Pattern = '(?m)(^target_link_libraries\(\r?\n  \$\{PACKAGE_NAME\}\r?\n)(?!  c\+\+_shared)'; Replacement = "`$1  c++_shared`n" },
+  @{ Path = 'node_modules\react-native\ReactAndroid\cmake-utils\ReactNative-application.cmake'; Pattern = '(?m)^(target_link_libraries\(\$\{CMAKE_PROJECT_NAME\})\r?\n(?!        c\+\+_shared)'; Replacement = "`$1`n        c++_shared`n" },
+  @{ Path = 'node_modules\react-native\ReactAndroid\cmake-utils\ReactNative-application.cmake'; Pattern = 'target_link_libraries\(\$\{CMAKE_PROJECT_NAME\} \$\{AUTOLINKED_LIBRARIES\}\)'; Replacement = 'target_link_libraries(${CMAKE_PROJECT_NAME} ${AUTOLINKED_LIBRARIES} c++_shared)' },
+  @{ Path = 'node_modules\react-native\ReactAndroid\cmake-utils\ReactNative-application.cmake'; Pattern = 'target_link_libraries\(\$\{autolinked_library\} common_flags\)'; Replacement = 'target_link_libraries(${autolinked_library} common_flags c++_shared)' }
+)
+foreach ($nativeCppLink in $nativeCppLinks) {
+  $nativeCmake = Join-Path $projectRoot $nativeCppLink.Path
+  if (Test-Path -LiteralPath $nativeCmake) {
+    $nativeContent = [System.IO.File]::ReadAllText($nativeCmake, $utf8NoBom)
+    if ([regex]::IsMatch($nativeContent, $nativeCppLink.Pattern)) {
+      $nativeContent = [regex]::Replace($nativeContent, $nativeCppLink.Pattern, $nativeCppLink.Replacement, 1)
+      [System.IO.File]::WriteAllText($nativeCmake, $nativeContent, $utf8NoBom)
+    }
+  }
+}
 $gradleContent = [System.IO.File]::ReadAllText($gradleFile, $utf8NoBom)
 $currentNameMatch = [regex]::Match($gradleContent, 'versionName\s+"(\d+\.\d+\.\d+)"')
 $currentCodeMatch = [regex]::Match($gradleContent, 'versionCode\s+(\d+)')
@@ -60,6 +80,9 @@ if ($VersionCode -lt 1) {
 Write-Host "同步应用版本：$Version (versionCode $VersionCode)" -ForegroundColor Cyan
 Update-RequiredText -Path (Join-Path $projectRoot 'app.json') -Pattern '"version"\s*:\s*"\d+\.\d+\.\d+"' -Replacement ('"version": "{0}"' -f $Version)
 Update-RequiredText -Path (Join-Path $projectRoot 'package.json') -Pattern '"version"\s*:\s*"\d+\.\d+\.\d+"' -Replacement ('"version": "{0}"' -f $Version)
+Update-RequiredText -Path (Join-Path $projectRoot 'desktop\package.json') -Pattern '"version"\s*:\s*"\d+\.\d+\.\d+"' -Replacement ('"version": "{0}"' -f $Version)
+Update-RequiredText -Path (Join-Path $projectRoot 'app.json') -Pattern '"versionCode"\s*:\s*\d+' -Replacement ('"versionCode": {0}' -f $VersionCode)
+Update-RequiredText -Path (Join-Path $projectRoot 'src\services\appUpdate.ts') -Pattern 'CURRENT_APP_VERSION = "\d+\.\d+\.\d+"' -Replacement ('CURRENT_APP_VERSION = "{0}"' -f $Version)
 Update-RequiredText -Path $gradleFile -Pattern 'versionCode\s+\d+' -Replacement ('versionCode {0}' -f $VersionCode)
 Update-RequiredText -Path $gradleFile -Pattern 'versionName\s+"\d+\.\d+\.\d+"' -Replacement ('versionName "{0}"' -f $Version)
 Update-RequiredText -Path (Join-Path $projectRoot 'src\screens\SettingsScreen.tsx') -Pattern 'value="v\d+\.\d+\.\d+"' -Replacement ('value="v{0}"' -f $Version)

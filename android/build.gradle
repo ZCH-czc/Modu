@@ -22,3 +22,11 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+// Keep native libraries on the same installed Build Tools version as the app.
+// Some dependencies bring their own Android Gradle Plugin whose default is 35.0.0.
+subprojects { subproject ->
+  subproject.plugins.withId("com.android.library") {
+    subproject.extensions.findByName("android").buildToolsVersion = rootProject.ext.buildToolsVersion
+  }
+}

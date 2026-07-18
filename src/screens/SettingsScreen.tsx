@@ -4,6 +4,7 @@ import { useEffect,
   useRef,
   useState } from "react";
 import {
+  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -25,6 +26,12 @@ import Animated, {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAppAlert } from "../components/AppDialog";
+import { IOSPopupModal } from "../components/IOSPopupModal";
+import {
+  checkForAppUpdate,
+  CURRENT_APP_VERSION,
+  type AppUpdateResult,
+} from "../services/appUpdate";
 import type {
   Book,
   PageTurn,
@@ -60,6 +67,9 @@ export function SettingsScreen(props: Props) {
   const [libraryVisible, setLibraryVisible] = useState(false);
   const [aboutVisible, setAboutVisible] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateVisible, setUpdateVisible] = useState(false);
+  const [updateResult, setUpdateResult] = useState<AppUpdateResult>();
 
   const clearCache = async () => {
     setBusy(true);
@@ -83,6 +93,33 @@ export function SettingsScreen(props: Props) {
         },
       },
     ]);
+  };
+
+  const checkUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const result = await checkForAppUpdate();
+      setUpdateResult(result);
+      setUpdateVisible(true);
+    } catch (error) {
+      Alert.alert(
+        "检查更新失败",
+        error instanceof Error ? error.message : "暂时无法连接 GitHub Releases，请稍后重试。",
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const openUpdateDownload = async () => {
+    if (!updateResult) return;
+    try {
+      await Linking.openURL(updateResult.update.downloadUrl);
+      setUpdateVisible(false);
+    } catch {
+      Alert.alert("无法打开下载页面", "请稍后前往 GitHub Releases 手动下载最新版本。");
+    }
   };
 
   return (
@@ -326,10 +363,16 @@ export function SettingsScreen(props: Props) {
             onPress={props.onOpenGuide}
           />
           <ActionRow
+            icon="cloud-download-outline"
+            title="系统更新"
+            value={checkingUpdate ? "检查中…" : `v${CURRENT_APP_VERSION}`}
+            onPress={() => void checkUpdate()}
+          />
+          <ActionRow
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.1"
+            value="v1.5.2"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -340,6 +383,12 @@ export function SettingsScreen(props: Props) {
         onClose={() => setLibraryVisible(false)}
         onDelete={props.onDeleteBook}
         visible={libraryVisible}
+      />
+      <UpdateModal
+        onClose={() => setUpdateVisible(false)}
+        onDownload={() => void openUpdateDownload()}
+        result={updateResult}
+        visible={updateVisible}
       />
       <AboutModal visible={aboutVisible} onClose={() => setAboutVisible(false)} />
     </SafeAreaView>
@@ -657,13 +706,93 @@ function LibraryModal({
   );
 }
 
+function UpdateModal({
+  visible,
+  result,
+  onClose,
+  onDownload,
+}: {
+  visible: boolean;
+  result?: AppUpdateResult;
+  onClose: () => void;
+  onDownload: () => void;
+}) {
+  const { resolvedLanguage } = useI18n();
+  if (!result) return null;
+  const available = result.status === "available";
+  const published = result.update.publishedAt
+    ? new Date(result.update.publishedAt).toLocaleDateString(
+        resolvedLanguage === "zh-CN" ? "zh-CN" : "en-US",
+        { year: "numeric", month: "short", day: "numeric" },
+      )
+    : undefined;
+  const size = result.update.downloadSize
+    ? `${(result.update.downloadSize / 1024 / 1024).toFixed(1)} MB`
+    : undefined;
+
+  return (
+    <IOSPopupModal onRequestClose={onClose} visible={visible}>
+      <View style={styles.updateCard}>
+        <View style={[styles.updateIcon, !available && styles.updateIconCurrent]}>
+          <Ionicons
+            color={available ? "#F3DFC0" : "#496455"}
+            name={available ? "cloud-download-outline" : "checkmark-outline"}
+            size={30}
+          />
+        </View>
+        <Text style={styles.updateEyebrow}>{available ? "NEW RELEASE" : "UP TO DATE"}</Text>
+        <Text style={styles.updateTitle}>{available ? "发现新版本" : "已是最新版"}</Text>
+        <Text style={styles.updateVersion}>
+          {available
+            ? `v${CURRENT_APP_VERSION}  →  v${result.update.version}`
+            : `${resolvedLanguage === "zh-CN" ? "墨读" : "Modu"} v${CURRENT_APP_VERSION}`}
+        </Text>
+        {available ? (
+          <>
+            <View style={styles.updateMetaRow}>
+              {published ? <Text style={styles.updateMeta}>{published}</Text> : null}
+              {size ? <Text style={styles.updateMeta}>{size}</Text> : null}
+              {result.update.downloadName ? (
+                <Text numberOfLines={1} style={styles.updateMeta}>{result.update.downloadName}</Text>
+              ) : null}
+            </View>
+            <ScrollView
+              contentContainerStyle={styles.updateNotesContent}
+              showsVerticalScrollIndicator={false}
+              style={styles.updateNotes}
+            >
+              <Text style={styles.updateNotesText}>{result.update.notes}</Text>
+            </ScrollView>
+            <Pressable onPress={onDownload} style={styles.updatePrimaryButton}>
+              <Ionicons color="#FFF9EE" name="download-outline" size={17} />
+              <Text style={styles.updatePrimaryText}>前往下载</Text>
+            </Pressable>
+            <Pressable onPress={onClose} style={styles.updateSecondaryButton}>
+              <Text style={styles.updateSecondaryText}>稍后再说</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Text style={styles.updateCurrentText}>你正在使用 GitHub Releases 上的最新稳定版本。</Text>
+            <Pressable onPress={onClose} style={styles.updatePrimaryButton}>
+              <Text style={styles.updatePrimaryText}>知道了</Text>
+            </Pressable>
+          </>
+        )}
+      </View>
+    </IOSPopupModal>
+  );
+}
+
 function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   return (
-    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <View style={styles.aboutBackdrop}>
+    <IOSPopupModal
+      onRequestClose={onClose}
+      visible={visible}
+    >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.1</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.2</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>
@@ -671,8 +800,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
             <Text style={styles.aboutButtonText}>知道了</Text>
           </Pressable>
         </View>
-      </View>
-    </Modal>
+    </IOSPopupModal>
   );
 }
 
@@ -867,6 +995,60 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 40,
   },
+  updateCard: {
+    alignItems: "center",
+    backgroundColor: "#FCFAF6",
+    borderRadius: 25,
+    padding: 24,
+    width: "100%",
+  },
+  updateIcon: {
+    alignItems: "center",
+    backgroundColor: "#315D4B",
+    borderRadius: 20,
+    height: 62,
+    justifyContent: "center",
+    width: 62,
+  },
+  updateIconCurrent: { backgroundColor: "#E7EFEA" },
+  updateEyebrow: { color: "#789083", fontSize: 8, fontWeight: "900", letterSpacing: 1.8, marginTop: 14 },
+  updateTitle: { color: "#353630", fontSize: 20, fontWeight: "900", marginTop: 5 },
+  updateVersion: { color: "#496455", fontSize: 11, fontWeight: "800", marginTop: 7 },
+  updateMetaRow: { flexDirection: "row", gap: 8, marginTop: 12, maxWidth: "100%" },
+  updateMeta: {
+    backgroundColor: "#EDF1ED",
+    borderRadius: 9,
+    color: "#788078",
+    flexShrink: 1,
+    fontSize: 8.5,
+    overflow: "hidden",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  updateNotes: {
+    alignSelf: "stretch",
+    backgroundColor: "#F4F1EA",
+    borderRadius: 16,
+    marginTop: 14,
+    maxHeight: 180,
+  },
+  updateNotesContent: { padding: 14 },
+  updateNotesText: { color: "#6F716B", fontSize: 10.5, lineHeight: 18 },
+  updateCurrentText: { color: "#817A70", fontSize: 11, lineHeight: 19, marginTop: 13, textAlign: "center" },
+  updatePrimaryButton: {
+    alignItems: "center",
+    backgroundColor: "#315D4B",
+    borderRadius: 14,
+    flexDirection: "row",
+    gap: 7,
+    height: 46,
+    justifyContent: "center",
+    marginTop: 16,
+    width: "100%",
+  },
+  updatePrimaryText: { color: "#FFF9EE", fontSize: 12, fontWeight: "800" },
+  updateSecondaryButton: { alignItems: "center", height: 38, justifyContent: "center", marginTop: 3, width: "100%" },
+  updateSecondaryText: { color: "#7F817A", fontSize: 10.5, fontWeight: "700" },
   aboutBackdrop: { alignItems: "center", backgroundColor: "#00000066", flex: 1, justifyContent: "center", padding: 30 },
   aboutCard: { alignItems: "center", backgroundColor: "#FCFAF6", borderRadius: 25, padding: 24, width: "100%" },
   aboutLogo: {

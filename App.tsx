@@ -17,7 +17,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { I18nProvider, Text } from "./src/i18n";
+import { I18nProvider, Text, useI18n } from "./src/i18n";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, {
   Easing as ReanimatedEasing,
@@ -28,8 +28,9 @@ import Reanimated, {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { AppDialogProvider, useAppAlert } from "./src/components/AppDialog";
+import { BrandLaunchScreen } from "./src/components/BrandLaunchScreen";
 import { OnboardingModal } from "./src/components/OnboardingModal";
-import { sampleBooks } from "./src/data/books";
+import { getSampleBooks } from "./src/data/books";
 import { BookSourceBrowserBridge } from "./src/components/BookSourceBrowserBridge";
 import { BookSourceModal } from "./src/screens/BookSourceModal";
 import { HomeShelf } from "./src/screens/HomeShelf";
@@ -105,17 +106,25 @@ function useEvent<T extends (...args: any[]) => any>(handler: T): T {
 }
 
 export default function App() {
+  const [launchVisible, setLaunchVisible] = useState(true);
+  const finishLaunch = useCallback(() => setLaunchVisible(false), []);
+
   return (
-    <I18nProvider>
-      <AppDialogProvider>
-        <AppContent />
-      </AppDialogProvider>
-    </I18nProvider>
+    <>
+      <I18nProvider>
+        <AppDialogProvider>
+          <AppContent />
+        </AppDialogProvider>
+      </I18nProvider>
+      {launchVisible ? <BrandLaunchScreen onFinished={finishLaunch} /> : null}
+    </>
   );
 }
 
 function AppContent() {
   const Alert = useAppAlert();
+  const { resolvedLanguage } = useI18n();
+  const sampleBooks = useMemo(() => getSampleBooks(resolvedLanguage), [resolvedLanguage]);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<AppTab>("shelf");
   const [preferences, setPreferences] = useState<ReaderPreferences>(defaultPreferences);
@@ -141,16 +150,26 @@ function AppContent() {
   const progressSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const progressDirty = useRef(false);
   const progressUiDirty = useRef(false);
+  const chapterLoadTasksRef = useRef(new Map<string, Promise<string>>());
+  const onlinePreloadRef = useRef<{
+    bookId?: string;
+    generation: number;
+    phase: "idle" | "loading" | "ready" | "partial";
+  }>({ generation: 0, phase: "idle" });
   const { width: screenWidth } = useWindowDimensions();
   const navWidth = Math.min(screenWidth - 24, 560);
   const tabProgress = useSharedValue(0);
 
-  const tabTrackStyle = useAnimatedStyle(
+  const shelfPageStyle = useAnimatedStyle(
     () => ({ transform: [{ translateX: -screenWidth * tabProgress.value }] }),
     [screenWidth],
   );
+  const settingsPageStyle = useAnimatedStyle(
+    () => ({ transform: [{ translateX: screenWidth * (1 - tabProgress.value) }] }),
+    [screenWidth],
+  );
   const navIndicatorStyle = useAnimatedStyle(
-    () => ({ transform: [{ translateX: (navWidth / 2) * tabProgress.value }] }),
+    () => ({ transform: [{ translateX: ((navWidth - 16) / 2) * tabProgress.value }] }),
     [navWidth],
   );
 
@@ -178,8 +197,8 @@ function AppContent() {
     readerProgress.stopAnimation();
     Animated.timing(readerProgress, {
       toValue: 0,
-      duration: 280,
-      easing: Easing.inOut(Easing.cubic),
+      duration: 260,
+      easing: Easing.bezier(0.4, 0, 0.6, 1),
       useNativeDriver: true,
     }).start(({ finished }) => {
       if (!finished) return;
@@ -195,6 +214,10 @@ function AppContent() {
       requestAnimationFrame(() => {
         setCurrentBook(undefined);
         setOnlineSession(undefined);
+        onlinePreloadRef.current = {
+          generation: onlinePreloadRef.current.generation + 1,
+          phase: "idle",
+        };
         if (progressUiDirty.current) {
           progressUiDirty.current = false;
           requestAnimationFrame(() => setProgress(next));
@@ -287,7 +310,7 @@ function AppContent() {
                 : ((pageIndex + 1) / pageCount) * 100,
         };
       }),
-    [hiddenSampleIds, importedBooks, onlineBooks, progress],
+    [hiddenSampleIds, importedBooks, onlineBooks, progress, sampleBooks],
   );
 
   const updatePreferences = (patch: Partial<ReaderPreferences>) => {
@@ -352,11 +375,10 @@ function AppContent() {
     readerProgress.setValue(0);
     setCurrentBook(book);
     requestAnimationFrame(() => {
-      Animated.spring(readerProgress, {
+      Animated.timing(readerProgress, {
         toValue: 1,
-        damping: 22,
-        stiffness: 190,
-        mass: 0.82,
+        duration: 300,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
         useNativeDriver: true,
       }).start();
     });
@@ -378,6 +400,64 @@ function AppContent() {
     const existing = onlineBooksRef.current.find((book) => book.id === created.id);
     if (!existing) await persistOnlineBook(created);
   };
+
+  const loadManagedOnlineChapter = useCallback(
+    async (
+      source: ImportedBookSource,
+      bookId: string,
+      chapter: OnlineChapter,
+    ) => {
+      const cached = await readCachedOnlineChapter(bookId, chapter);
+      if (cached) return cached;
+
+      const key = `${bookId}:${chapter.url}`;
+      const existing = chapterLoadTasksRef.current.get(key);
+      if (existing) return existing;
+
+      const task = loadOnlineChapter(source, bookId, chapter)
+        .then((result) => result.content)
+        .finally(() => chapterLoadTasksRef.current.delete(key));
+      chapterLoadTasksRef.current.set(key, task);
+      return task;
+    },
+    [],
+  );
+
+  const preloadOnlineNeighbors = useCallback(
+    (bookId: string, session: OnlineSession) => {
+      const source = sources.find(
+        (item) => item.id === session.sourceId && item.enabled,
+      );
+      const generation = onlinePreloadRef.current.generation + 1;
+      onlinePreloadRef.current = {
+        bookId,
+        generation,
+        phase: source ? "loading" : "idle",
+      };
+      if (!source) return;
+
+      const neighborIndexes = [session.index + 1, session.index - 1].filter(
+        (index) => index >= 0 && index < session.chapters.length,
+      );
+      if (!neighborIndexes.length) {
+        onlinePreloadRef.current.phase = "ready";
+        return;
+      }
+
+      void Promise.allSettled(
+        neighborIndexes.map((index) =>
+          loadManagedOnlineChapter(source, bookId, session.chapters[index]),
+        ),
+      ).then((results) => {
+        const state = onlinePreloadRef.current;
+        if (state.bookId !== bookId || state.generation !== generation) return;
+        state.phase = results.every((result) => result.status === "fulfilled")
+          ? "ready"
+          : "partial";
+      });
+    },
+    [loadManagedOnlineChapter, sources],
+  );
 
   const openOnlineBook = async (shelfBook: Book, rawResult?: OnlineBookResult) => {
     if (!shelfBook.sourceId || !shelfBook.bookUrl) {
@@ -426,7 +506,7 @@ function AppContent() {
         if (!source) {
           throw new Error("当前章节尚未下载，请恢复书源后再试。");
         }
-        content = (await loadOnlineChapter(source, shelfBook.id, chapter)).content;
+        content = await loadManagedOnlineChapter(source, shelfBook.id, chapter);
       }
       const downloadedChapterCount = await countCachedOnlineChapters(shelfBook.id);
       const pages = paginateOnlineText(content);
@@ -449,12 +529,16 @@ function AppContent() {
         fullyDownloaded: downloadedChapterCount >= chapters.length,
       };
       await persistOnlineBook(opened);
-      setOnlineSession({
+      const nextSession: OnlineSession = {
         sourceId: shelfBook.sourceId,
         chapters,
         index,
-      });
+      };
+      setOnlineSession(nextSession);
       presentBook(opened);
+      requestAnimationFrame(() =>
+        preloadOnlineNeighbors(opened.id, nextSession),
+      );
     } finally {
       setOnlineLoading(false);
     }
@@ -532,7 +616,7 @@ function AppContent() {
         if (!source) {
           throw new Error("这一章尚未下载，请恢复书源后再试。");
         }
-        content = (await loadOnlineChapter(source, book.id, chapter)).content;
+        content = await loadManagedOnlineChapter(source, book.id, chapter);
       }
       const downloadedChapterCount = await countCachedOnlineChapters(book.id);
       const pages = paginateOnlineText(content);
@@ -558,9 +642,13 @@ function AppContent() {
         },
       };
       progressDirty.current = true;
-      setOnlineSession({ ...session, index: nextIndex });
+      const nextSession = { ...session, index: nextIndex };
+      setOnlineSession(nextSession);
       setCurrentBook(opened);
       await persistOnlineBook(opened);
+      requestAnimationFrame(() =>
+        preloadOnlineNeighbors(opened.id, nextSession),
+      );
     } catch (error) {
       Alert.alert(
         "章节加载失败",
@@ -672,6 +760,28 @@ function AppContent() {
     }, 500);
   };
 
+  const handleRenameShelfBook = async (book: Book, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed || trimmed === book.title || book.format === "sample") return;
+    if (book.format === "web") {
+      const next = onlineBooksRef.current.map((item) =>
+        item.id === book.id ? { ...item, title: trimmed } : item,
+      );
+      onlineBooksRef.current = next;
+      setOnlineBooks(next);
+      await saveOnlineBooks(next);
+    } else {
+      const next = importedBooks.map((item) =>
+        item.id === book.id ? { ...item, title: trimmed } : item,
+      );
+      setImportedBooks(next);
+      await saveImportedBooks(next);
+    }
+    setCurrentBook((current) =>
+      current?.id === book.id ? { ...current, title: trimmed } : current,
+    );
+  };
+
   const handleDeleteBook = async (book: Book) => {
     try {
       const next = await deleteImportedBook(book, importedBooks);
@@ -772,6 +882,7 @@ function AppContent() {
   const stableHandleDeleteBook = useEvent(handleDeleteBook);
   const stableHandleRemoveCapturedBook = useEvent(handleRemoveCapturedBook);
   const stableHandleRemoveShelfBook = useEvent(handleRemoveShelfBook);
+  const stableHandleRenameShelfBook = useEvent(handleRenameShelfBook);
   const stableHandleAddWebCapture = useEvent(handleAddWebCapture);
   const stableHandleReadWebCapture = useEvent(handleReadWebCapture);
   const stableHandleVolumeKeys = useEvent(handleVolumeKeys);
@@ -814,12 +925,9 @@ function AppContent() {
             <View style={styles.content}>
               <Reanimated.View
                 renderToHardwareTextureAndroid
-                style={[styles.tabTrack, { width: screenWidth * 2 }, tabTrackStyle]}
+                pointerEvents={tab === "shelf" ? "auto" : "none"}
+                style={[styles.tabPage, shelfPageStyle]}
               >
-                <View
-                  pointerEvents={tab === "shelf" ? "auto" : "none"}
-                  style={[styles.tabPage, { width: screenWidth }]}
-                >
                 <MemoHomeShelf
                   books={books}
                   importedCount={importedBooks.length}
@@ -828,13 +936,15 @@ function AppContent() {
                   onOnline={openSourceModal}
                   onOpen={stableHandleOpenBook}
                   onRemove={stableHandleRemoveShelfBook}
+                  onRename={stableHandleRenameShelfBook}
                 />
-                </View>
+              </Reanimated.View>
 
-                <View
-                  pointerEvents={tab === "settings" ? "auto" : "none"}
-                  style={[styles.tabPage, { width: screenWidth }]}
-                >
+              <Reanimated.View
+                renderToHardwareTextureAndroid
+                pointerEvents={tab === "settings" ? "auto" : "none"}
+                style={[styles.tabPage, settingsPageStyle]}
+              >
                 <MemoSettingsScreen
                   importedBooks={importedBooks}
                   onChange={stableUpdatePreferences}
@@ -847,7 +957,6 @@ function AppContent() {
                   preferences={preferences}
                   sourceCount={sources.length}
                 />
-                </View>
               </Reanimated.View>
             </View>
 
@@ -867,7 +976,7 @@ function AppContent() {
                 pointerEvents="none"
                 style={[
                   styles.navSelectionSlot,
-                  { width: navWidth / 2 },
+                  { width: (navWidth - 16) / 2 },
                   navIndicatorStyle,
                 ]}
               >
@@ -1008,8 +1117,7 @@ const styles = StyleSheet.create({
   app: { backgroundColor: "#F4F1EA", flex: 1 },
   appHidden: { display: "none" },
   content: { flex: 1, overflow: "hidden" },
-  tabTrack: { backgroundColor: "#F4F1EA", bottom: 0, flexDirection: "row", left: 0, position: "absolute", top: 0 },
-  tabPage: { backgroundColor: "#F4F1EA", height: "100%" },
+  tabPage: { backgroundColor: "#F4F1EA", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
   loading: { alignItems: "center", backgroundColor: "#F4F1EA", flex: 1, gap: 13, justifyContent: "center" },
   loadingText: { color: "#778078", fontSize: 13 },
   nav: {
@@ -1036,7 +1144,7 @@ const styles = StyleSheet.create({
   navTint: { backgroundColor: "#FFFFFF24", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
   navShine: { backgroundColor: "#FFFFFFA8", height: StyleSheet.hairlineWidth, left: 20, position: "absolute", right: 20, top: 1 },
   navItem: { alignItems: "center", flex: 1, gap: 3, height: "100%", justifyContent: "center", zIndex: 1 },
-  navSelectionSlot: { alignItems: "center", height: 34, justifyContent: "center", left: 0, position: "absolute", top: 7 },
+  navSelectionSlot: { alignItems: "center", height: 34, justifyContent: "center", left: 8, position: "absolute", top: 7 },
   navIcon: { alignItems: "center", borderRadius: 17, height: 34, justifyContent: "center", width: 48 },
   navIconActive: {
     backgroundColor: "#496052E8",

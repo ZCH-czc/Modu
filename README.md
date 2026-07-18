@@ -6,16 +6,6 @@ Modu combines a native bookshelf, EPUB/PDF import, dynamic book sources, web dis
 
 [Download the latest release](https://github.com/ZCH-czc/Modu/releases/latest)
 
-## Preview
-
-| Phone | Tablet bookshelf |
-| --- | --- |
-| ![Modu phone bookshelf](docs/images/phone-bookshelf.png) | ![Modu tablet bookshelf](docs/images/tablet-bookshelf.png) |
-
-| Tablet reader | Tablet settings |
-| --- | --- |
-| ![Modu tablet reader](docs/images/tablet-reader.png) | ![Modu tablet settings](docs/images/tablet-settings.png) |
-
 ## Highlights
 
 - Local bookshelf with add, import, progress tracking, and removal workflows
@@ -73,7 +63,7 @@ pnpm start -- --dev-client
 The repository includes a version-aware build script:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -Version 1.5.1 -VersionCode 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -Version 1.5.2 -VersionCode 6
 ```
 
 The APK is written to `dist/android`.
@@ -98,7 +88,6 @@ src/
 android/        Native Android project
 desktop/        Windows Electron wrapper
 scripts/        Build and book-source test utilities
-docs/images/    Repository screenshots
 ```
 
 ## Privacy
