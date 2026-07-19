@@ -1,6 +1,7 @@
 import {
   LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet,
+import { ImageBackground,
+  StyleSheet,
   View,
 } from 'react-native';
 import { Text } from "../i18n";
@@ -17,37 +18,46 @@ export function BookCover({
   height: number;
 }) {
   const color = book.darkCover ? '#FFF9ED' : '#292824';
+  const imageUri = book.coverMode === 'image'
+    ? book.coverImageUri
+    : book.coverMode === 'colors'
+      ? undefined
+      : book.coverUrl;
+  const content = (
+    <>
+      <View style={[styles.rule, { backgroundColor: book.accent }]} />
+      <View style={styles.center}>
+        <Text
+          style={[styles.title, { color, fontSize: Math.max(14, width * 0.16) }]}
+          numberOfLines={3}
+        >
+          {book.title}
+        </Text>
+        <Text style={[styles.author, { color: `${color}B5` }]}>{book.author}</Text>
+      </View>
+      <Text style={[styles.format, { color: `${color}A0` }]}>
+        {book.format === 'sample'
+          ? '墨读'
+          : book.format === 'webclip'
+            ? '网页'
+            : book.format.toUpperCase()}
+      </Text>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progress, { width: `${book.progress}%`, backgroundColor: book.accent }]} />
+      </View>
+    </>
+  );
+
   return (
     <View style={[styles.shadow, { width, height }]}>
-      <LinearGradient colors={book.coverColors} style={styles.cover}>
-        <View style={[styles.rule, { backgroundColor: book.accent }]} />
-        <View style={styles.center}>
-          <Text
-            style={[styles.title, { color, fontSize: Math.max(14, width * 0.16) }]}
-            numberOfLines={3}
-          >
-            {book.title}
-          </Text>
-          <Text style={[styles.author, { color: `${color}B5` }]}>
-            {book.author}
-          </Text>
-        </View>
-        <Text style={[styles.format, { color: `${color}A0` }]}>
-          {book.format === 'sample'
-            ? '墨读'
-            : book.format === 'webclip'
-              ? '网页'
-              : book.format.toUpperCase()}
-        </Text>
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progress,
-              { width: `${book.progress * 100}%`, backgroundColor: book.accent },
-            ]}
-          />
-        </View>
-      </LinearGradient>
+      {imageUri ? (
+        <ImageBackground imageStyle={styles.coverImage} source={{ uri: imageUri }} style={styles.cover}>
+          <View style={styles.imageShade} />
+          {content}
+        </ImageBackground>
+      ) : (
+        <LinearGradient colors={book.coverColors} style={styles.cover}>{content}</LinearGradient>
+      )}
     </View>
   );
 }
@@ -63,6 +73,8 @@ const styles = StyleSheet.create({
     elevation: 7,
   },
   cover: { flex: 1, borderRadius: 10, overflow: 'hidden', padding: 13 },
+  coverImage: { borderRadius: 10 },
+  imageShade: { backgroundColor: "rgba(17, 24, 20, 0.36)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
   rule: { width: 22, height: 3, borderRadius: 2 },
   center: { flex: 1, justifyContent: 'center' },
   title: { fontWeight: '800', lineHeight: 26, letterSpacing: 1 },

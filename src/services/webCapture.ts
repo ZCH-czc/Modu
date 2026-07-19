@@ -1,5 +1,9 @@
 import { paginateOnlineText } from "./bookSources";
-import type { Book, ReaderPreferences, WebChapterExtraction, WebPageExtraction } from "../types";
+import {
+  paginateTextForReader,
+  type ReaderPaginationLayout,
+} from "./readerPagination";
+import type { Book, WebChapterExtraction, WebPageExtraction } from "../types";
 
 export function createWebCaptureBook(extraction: WebPageExtraction, pageTarget = 520): Book {
   const chapters = extraction.chapters?.length
@@ -39,43 +43,16 @@ export function createWebCaptureBook(extraction: WebPageExtraction, pageTarget =
   };
 }
 
-export function estimateWebCapturePageTarget(
-  width: number,
-  height: number,
-  preferences: ReaderPreferences,
-) {
-  const columnWidth = Math.min(Math.max(width, 280), 760);
-  const textWidth = Math.max(
-    180,
-    columnWidth - preferences.horizontalPadding * 2,
-  );
-  const glyphWidth = Math.max(preferences.fontSize * 1.04, 1);
-  const charactersPerLine = Math.max(10, Math.floor(textWidth / glyphWidth));
-  const lineHeight = Math.max(
-    preferences.fontSize * preferences.lineHeight,
-    preferences.fontSize,
-  );
-  const readingHeight = Math.max(260, height - 116);
-  const estimatedParagraphs = Math.max(1, Math.floor(readingHeight / lineHeight / 5));
-  const paragraphSpace = estimatedParagraphs * preferences.paragraphSpacing;
-  const linesPerPage = Math.max(
-    8,
-    Math.floor((readingHeight - paragraphSpace) / lineHeight),
-  );
-
-  return Math.max(
-    220,
-    Math.min(1200, Math.floor(charactersPerLine * linesPerPage * 0.9)),
-  );
-}
-
-export function repaginateWebCaptureBook(book: Book, pageTarget: number): Book {
+export function repaginateWebCaptureBook(
+  book: Book,
+  layout: ReaderPaginationLayout,
+): Book {
   if (book.format !== "webclip" || !book.webChapters?.length) return book;
 
   const pages: string[] = [];
   const pageTitles: string[] = [];
   book.webChapters.forEach((chapter) => {
-    const chapterPages = paginateOnlineText(chapter.content, pageTarget);
+    const chapterPages = paginateTextForReader(chapter.content, layout);
     pages.push(...chapterPages);
     pageTitles.push(...chapterPages.map(() => chapter.title));
   });

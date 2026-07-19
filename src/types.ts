@@ -6,6 +6,13 @@ export type ReaderOrientation = 'auto' | 'portrait' | 'landscape';
 export type TextAlignment = 'left' | 'justify';
 export type WebReaderFlow = 'paged' | 'scroll';
 export type ReaderFont = 'serif' | 'sans' | 'system';
+export type BookCoverMode = 'colors' | 'image';
+
+export interface BookCoverAppearance {
+  mode: BookCoverMode;
+  colors?: readonly [string, string];
+  imageUri?: string;
+}
 
 export interface Book {
   id: string;
@@ -20,7 +27,9 @@ export interface Book {
   darkCover?: boolean;
   pages: string[];
   pageTitles?: string[];
+  paginationVersion?: number;
   format: BookFormat;
+  lastOpenedAt?: number;
   fileUri?: string;
   contentUri?: string;
   importedAt?: number;
@@ -29,10 +38,13 @@ export interface Book {
   bookUrl?: string;
   tocUrl?: string;
   coverUrl?: string;
+  coverMode?: BookCoverMode;
+  coverImageUri?: string;
   sourceUrl?: string;
   webChapters?: WebChapterExtraction[];
   webNextUrl?: string;
   webCurrentChapterIndex?: number;
+  localChapters?: Array<{ title: string; text: string }>;
   onlineChapterIndex?: number;
   onlineChapterUrl?: string;
   onlineChapters?: OnlineChapter[];
@@ -80,6 +92,32 @@ export interface ReaderPreferences {
   showProgress: boolean;
   immersiveMode: boolean;
   webReaderFlow: WebReaderFlow;
+}
+
+export type AnnotationColor = "amber" | "green" | "blue" | "rose";
+
+export interface ReaderAnnotation {
+  id: string;
+  bookId: string;
+  pageIndex: number;
+  chapterIndex?: number;
+  paragraphIndex: number;
+  chapterTitle: string;
+  quote: string;
+  note: string;
+  color: AnnotationColor;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ReaderBookmark {
+  id: string;
+  bookId: string;
+  pageIndex: number;
+  chapterIndex?: number;
+  chapterTitle: string;
+  excerpt: string;
+  createdAt: number;
 }
 
 export interface ReadingProgress {

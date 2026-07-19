@@ -65,11 +65,15 @@ function translatePattern(source: string): string | undefined {
   if ((match = source.match(/^网络请求失败（HTTP (\d+)）。$/))) return `Network request failed (HTTP ${match[1]}).`;
   if ((match = source.match(/^章节 (\d+)\/(\d+) · (\d+)\/(\d+)$/))) return `Chapter ${match[1]}/${match[2]} · Page ${match[3]}/${match[4]}`;
   if ((match = source.match(/^章节 (\d+)\/(\d+)$/))) return `Chapter ${match[1]}/${match[2]}`;
+  if ((match = source.match(/^正在解析章节 (\d+) \/ (\d+)$/))) return `Parsing chapter ${match[1]} of ${match[2]}`;
+  if ((match = source.match(/^正在排版章节 (\d+) \/ (\d+)$/))) return `Laying out chapter ${match[1]} of ${match[2]}`;
   if ((match = source.match(/^删除“(.+)”后，书架中来自该书源的书将暂时无法打开。$/))) return `After deleting “${match[1]}”, books from this source will be unavailable until it is restored.`;
   if ((match = source.match(/^网页验证后请求仍失败（HTTP (\d+)）。$/))) return `The request still failed after web verification (HTTP ${match[1]}).`;
   if ((match = source.match(/^(\d+) 个书源暂时无法连接$/))) return `${match[1]} sources are temporarily unavailable`;
   if ((match = source.match(/^全部书源 · (\d+) 个$/))) return `All Sources · ${match[1]}`;
   if ((match = source.match(/^已导入 · (\d+)$/))) return `Imported · ${match[1]}`;
+if ((match = source.match(/^藏书、设置、进度与书签已收进备份，包含 (\d+) 个本地文件。$/))) return `Your library, settings, progress, and bookmarks were backed up with ${match[1]} local files.`;
+  if ((match = source.match(/^书架已经回到备份时的模样，并恢复了 (\d+) 个本地文件。$/))) return `Your library has been restored with ${match[1]} local files.`;
   return undefined;
 }
 

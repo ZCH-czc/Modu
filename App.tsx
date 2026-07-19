@@ -10,6 +10,7 @@ import { memo,
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   BackHandler,
   Easing,
   Pressable,
@@ -63,29 +64,61 @@ import {
   defaultPreferences,
   deleteImportedBook,
   importDocument,
+  type ImportProgress,
   importBookFromUri,
+  loadBookmarks,
   loadHiddenSampleBooks,
   loadImportedBooks,
   loadOnboardingComplete,
   loadPreferences,
   loadProgress,
+  persistEpubPagination,
+  repaginateImportedTextBook,
+  saveBookmarks,
   saveHiddenSampleBooks,
   saveImportedBooks,
   saveOnboardingComplete,
   savePreferences,
   saveProgress,
 } from "./src/services/runtime";
+import { exportAppBackup, restoreAppBackup } from "./src/services/appBackup";
+import {
+  exportAnnotationsMarkdown,
+  loadAnnotations,
+  migrateAnnotationsForPagination,
+  saveAnnotations,
+} from "./src/services/readerAnnotations";
+import {
+  addReadingSession,
+  emptyReadingStats,
+  loadReadingStats,
+  saveReadingStats,
+  type ReadingStats,
+} from "./src/services/readingStats";
+import { loadReadingGoal, saveReadingGoal } from "./src/services/readingGoal";
 import {
   createWebCaptureBook,
-  estimateWebCapturePageTarget,
   repaginateWebCaptureBook,
 } from "./src/services/webCapture";
+import {
+  createReaderPaginationLayout,
+  type ReaderPaginationLayout,
+} from "./src/services/readerPagination";
+import {
+  deleteBookCoverImage,
+  loadBookAppearances,
+  pickBookCoverImage,
+  saveBookAppearances,
+} from "./src/services/bookAppearance";
 import type {
   AppTab,
   Book,
+  BookCoverAppearance,
   ImportedBookSource,
   OnlineBookResult,
   OnlineChapter,
+  ReaderAnnotation,
+  ReaderBookmark,
   ReaderPreferences,
   ReadingProgress,
   WebPageExtraction,
@@ -109,6 +142,47 @@ function useEvent<T extends (...args: any[]) => any>(handler: T): T {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
   return useCallback(((...args: Parameters<T>) => handlerRef.current(...args)) as T, []);
+}
+
+function prepareBookForPagination(
+  book: Book,
+  layout: ReaderPaginationLayout,
+): Book {
+  if (book.format === "webclip" && book.webChapters?.length) {
+    return repaginateWebCaptureBook(book, layout);
+  }
+  if (book.format === "epub" || book.format === "txt") {
+    return repaginateImportedTextBook(book, layout);
+  }
+  return book;
+}
+
+function migrateBookmarks(
+  bookmarks: ReaderBookmark[],
+  bookId: string,
+  oldPageCount: number,
+  newPageCount: number,
+) {
+  const oldLastPage = Math.max(oldPageCount - 1, 1);
+  const newLastPage = Math.max(newPageCount - 1, 0);
+  const migrated = bookmarks.map((bookmark) =>
+    bookmark.bookId === bookId
+      ? {
+          ...bookmark,
+          pageIndex: Math.min(
+            newLastPage,
+            Math.round((bookmark.pageIndex / oldLastPage) * newLastPage),
+          ),
+        }
+      : bookmark,
+  );
+  return migrated.filter((bookmark, index, items) =>
+    items.findIndex((candidate) =>
+      candidate.bookId === bookmark.bookId &&
+      candidate.chapterIndex === bookmark.chapterIndex &&
+      candidate.pageIndex === bookmark.pageIndex
+    ) === index,
+  );
 }
 
 export default function App() {
@@ -135,6 +209,7 @@ function AppContent() {
   const [tab, setTab] = useState<AppTab>("shelf");
   const [preferences, setPreferences] = useState<ReaderPreferences>(defaultPreferences);
   const [importedBooks, setImportedBooks] = useState<Book[]>([]);
+  const [bookAppearances, setBookAppearances] = useState<Record<string, BookCoverAppearance>>({});
   const [hiddenSampleIds, setHiddenSampleIds] = useState<string[]>([]);
   const [onlineBooks, setOnlineBooks] = useState<Book[]>([]);
   const onlineBooksRef = useRef<Book[]>([]);
@@ -149,8 +224,14 @@ function AppContent() {
   const [onlineSession, setOnlineSession] = useState<OnlineSession>();
   const [downloadState, setDownloadState] = useState<DownloadState>();
   const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
+  const [bookmarks, setBookmarks] = useState<ReaderBookmark[]>([]);
+  const [annotations, setAnnotations] = useState<ReaderAnnotation[]>([]);
+  const [readingStats, setReadingStats] = useState<ReadingStats>(emptyReadingStats);
+  const [readingGoalMinutes, setReadingGoalMinutes] = useState(30);
   const [currentBook, setCurrentBook] = useState<Book>();
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress>();
+  const importProgressValue = useRef(new Animated.Value(0)).current;
   const readerProgress = useRef(new Animated.Value(0)).current;
   const preferencesRef = useRef<ReaderPreferences>(defaultPreferences);
   const preferencesSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -158,6 +239,15 @@ function AppContent() {
   const progressSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const progressDirty = useRef(false);
   const progressUiDirty = useRef(false);
+  const readingStatsRef = useRef<ReadingStats>(emptyReadingStats);
+  const readingSessionRef = useRef<{
+    bookId: string;
+    startedAt: number;
+    pageTurns: number;
+    lastPageIndex?: number;
+  } | undefined>(undefined);
+  const currentBookRef = useRef<Book | undefined>(undefined);
+  const appStateRef = useRef(AppState.currentState);
   const chapterLoadTasksRef = useRef(new Map<string, Promise<string>>());
   const onlinePreloadRef = useRef<{
     bookId?: string;
@@ -167,6 +257,7 @@ function AppContent() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const navWidth = Math.min(screenWidth - 24, 560);
   const tabProgress = useSharedValue(0);
+  currentBookRef.current = currentBook;
 
   const shelfPageStyle = useAnimatedStyle(
     () => ({ transform: [{ translateX: -screenWidth * tabProgress.value }] }),
@@ -189,6 +280,67 @@ function AppContent() {
       easing: ReanimatedEasing.bezier(0.22, 1, 0.36, 1),
     });
   };
+
+  const commitReadingSession = useEvent((restart = false) => {
+    const session = readingSessionRef.current;
+    if (!session) return;
+    const now = Date.now();
+    const next = addReadingSession(
+      readingStatsRef.current,
+      session.bookId,
+      session.startedAt,
+      now,
+      session.pageTurns,
+    );
+    if (next !== readingStatsRef.current) {
+      readingStatsRef.current = next;
+      setReadingStats(next);
+      void saveReadingStats(next);
+    }
+    readingSessionRef.current =
+      restart && appStateRef.current === "active" && currentBookRef.current
+        ? {
+            bookId: currentBookRef.current.id,
+            startedAt: now,
+            pageTurns: 0,
+            lastPageIndex: session.lastPageIndex,
+          }
+        : undefined;
+  });
+
+  const startReadingSession = useEvent((bookId: string) => {
+    if (appStateRef.current !== "active") return;
+    if (readingSessionRef.current?.bookId === bookId) return;
+    commitReadingSession(false);
+    readingSessionRef.current = {
+      bookId,
+      startedAt: Date.now(),
+      pageTurns: 0,
+    };
+  });
+
+  useEffect(() => {
+    if (currentBook) startReadingSession(currentBook.id);
+    else commitReadingSession(false);
+    return () => commitReadingSession(false);
+  }, [commitReadingSession, currentBook?.id, startReadingSession]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      appStateRef.current = nextState;
+      if (nextState === "active" && currentBookRef.current) {
+        startReadingSession(currentBookRef.current.id);
+      } else {
+        commitReadingSession(false);
+      }
+    });
+    const interval = setInterval(() => commitReadingSession(true), 30_000);
+    return () => {
+      subscription.remove();
+      clearInterval(interval);
+      commitReadingSession(false);
+    };
+  }, [commitReadingSession, startReadingSession]);
 
   const closeWebReader = () => {
     setWebReaderVisible(false);
@@ -275,8 +427,12 @@ function AppContent() {
       loadProgress(),
       loadHiddenSampleBooks(),
       loadOnboardingComplete(),
+      loadBookAppearances(),
+      loadBookmarks(),
+      loadAnnotations(),
+      loadReadingStats(),
     ])
-      .then(([savedPreferences, localBooks, savedOnlineBooks, savedSources, readingProgress, hiddenSamples, onboardingComplete]) => {
+      .then(([savedPreferences, localBooks, savedOnlineBooks, savedSources, readingProgress, hiddenSamples, onboardingComplete, savedBookAppearances, savedBookmarks, savedAnnotations, savedReadingStats]) => {
         preferencesRef.current = savedPreferences;
         setPreferences(savedPreferences);
         setImportedBooks(localBooks);
@@ -286,6 +442,11 @@ function AppContent() {
         setProgress(readingProgress);
         setHiddenSampleIds(hiddenSamples);
         setOnboardingVisible(!onboardingComplete);
+        setBookAppearances(savedBookAppearances);
+        setBookmarks(savedBookmarks);
+        setAnnotations(savedAnnotations);
+        readingStatsRef.current = savedReadingStats;
+        setReadingStats(savedReadingStats);
         pendingProgress.current = readingProgress;
         void applyOrientation(savedPreferences.orientation);
         void applyBrightness(savedPreferences);
@@ -295,6 +456,10 @@ function AppContent() {
       })
       .finally(() => setReady(true));
   }, []);
+  useEffect(() => {
+    void loadReadingGoal().then(setReadingGoalMinutes);
+  }, []);
+
 
   useEffect(
     () => () => {
@@ -313,8 +478,13 @@ function AppContent() {
       [...sampleBooks.filter((book) => !hiddenSampleIds.includes(book.id)), ...importedBooks, ...onlineBooks].map((book) => {
         const pageIndex = progress[book.id]?.pageIndex ?? 0;
         const pageCount = Math.max(book.pages.length, 1);
+        const appearance = bookAppearances[book.id];
         return {
           ...book,
+          coverColors: appearance?.colors ?? book.coverColors,
+          coverMode: appearance?.mode,
+          coverImageUri: appearance?.mode === "image" ? appearance.imageUri : undefined,
+          lastOpenedAt: progress[book.id]?.updatedAt ?? book.importedAt ?? 0,
           progress:
             book.format === "web"
               ? book.progress
@@ -323,7 +493,7 @@ function AppContent() {
                 : ((pageIndex + 1) / pageCount) * 100,
         };
       }),
-    [hiddenSampleIds, importedBooks, onlineBooks, progress, sampleBooks],
+    [bookAppearances, hiddenSampleIds, importedBooks, onlineBooks, progress, sampleBooks],
   );
 
   const updatePreferences = (patch: Partial<ReaderPreferences>) => {
@@ -368,58 +538,84 @@ function AppContent() {
     })();
   };
 
+  const updateImportProgress = useCallback((next: ImportProgress) => {
+    setImportProgress(next);
+    Animated.timing(importProgressValue, {
+      toValue: next.progress,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [importProgressValue]);
   const handleImport = async () => {
     if (importing) return;
     setImporting(true);
+    importProgressValue.setValue(0.02);
+    setImportProgress({ progress: 0.02, message: "等待选择书籍" });
     try {
-      const book = await importDocument(importedBooks);
+      const book = await importDocument(importedBooks, updateImportProgress);
       if (book) {
         setImportedBooks((items) => [...items, book]);
+        await new Promise((resolve) => setTimeout(resolve, 220));
         Alert.alert("导入成功", "《" + book.title + "》已加入书架。");
       }
     } catch (error) {
       Alert.alert("导入失败", error instanceof Error ? error.message : "无法读取这个文件。");
     } finally {
       setImporting(false);
+      setImportProgress(undefined);
+      importProgressValue.setValue(0);
     }
   };
 
   const presentBook = (book: Book) => {
-    let preparedBook = book;
-    if (book.format === "webclip" && book.webChapters?.length) {
-      const pageTarget = estimateWebCapturePageTarget(
-        screenWidth,
-        screenHeight,
-        preferencesRef.current,
+    const layout = createReaderPaginationLayout(
+      screenWidth,
+      screenHeight,
+      preferencesRef.current,
+    );
+    const preparedBook = prepareBookForPagination(book, layout);
+
+    const paginationChanged =
+      preparedBook.pages.length !== book.pages.length ||
+      preparedBook.pages.some((page, index) => page !== book.pages[index]);
+    if (paginationChanged) {
+      const oldPage = pendingProgress.current[book.id]?.pageIndex ?? 0;
+      const oldLastPage = Math.max(book.pages.length - 1, 1);
+      const newLastPage = Math.max(preparedBook.pages.length - 1, 0);
+      const migratedPage = Math.min(
+        newLastPage,
+        Math.round((oldPage / oldLastPage) * newLastPage),
       );
-      preparedBook = repaginateWebCaptureBook(book, pageTarget);
-
-      const paginationChanged =
-        preparedBook.pages.length !== book.pages.length ||
-        preparedBook.pages[0] !== book.pages[0];
-      if (paginationChanged) {
-        const oldPage = pendingProgress.current[book.id]?.pageIndex ?? 0;
-        const oldLastPage = Math.max(book.pages.length - 1, 1);
-        const newLastPage = Math.max(preparedBook.pages.length - 1, 0);
-        const migratedPage = Math.min(
-          newLastPage,
-          Math.round((oldPage / oldLastPage) * newLastPage),
+      const nextProgress = {
+        ...pendingProgress.current,
+        [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
+      };
+      pendingProgress.current = nextProgress;
+      setProgress(nextProgress);
+      void saveProgress(nextProgress);
+      setBookmarks((items) => {
+        const next = migrateBookmarks(
+          items,
+          book.id,
+          book.pages.length,
+          preparedBook.pages.length,
         );
-        const nextProgress = {
-          ...pendingProgress.current,
-          [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
-        };
-        pendingProgress.current = nextProgress;
-        setProgress(nextProgress);
-        void saveProgress(nextProgress);
+        void saveBookmarks(next);
+        return next;
+      });      setAnnotations((items) => {
+        const next = migrateAnnotationsForPagination(items, book.id, preparedBook.pages);
+        void saveAnnotations(next);
+        return next;
+      });
 
-        if (importedBooks.some((item) => item.id === book.id)) {
-          const nextBooks = importedBooks.map((item) =>
-            item.id === book.id ? preparedBook : item,
-          );
-          setImportedBooks(nextBooks);
-          void saveImportedBooks(nextBooks);
-        }
+      if (importedBooks.some((item) => item.id === book.id)) {
+        const nextBooks = importedBooks.map((item) =>
+          item.id === book.id ? preparedBook : item,
+        );
+        setImportedBooks(nextBooks);
+        void saveImportedBooks(nextBooks);
+        void persistEpubPagination(preparedBook);
       }
     }
     readerProgress.setValue(0);
@@ -433,6 +629,128 @@ function AppContent() {
       }).start();
     });
   };
+
+  const handlePaginationMeasured = useEvent((layout: ReaderPaginationLayout) => {
+    const book = currentBook;
+    if (!book) return;
+    const prepared = prepareBookForPagination(book, layout);
+    const paginationChanged =
+      prepared.pages.length !== book.pages.length ||
+      prepared.pages.some((page, index) => page !== book.pages[index]);
+    if (!paginationChanged) return;
+
+    const oldPage = pendingProgress.current[book.id]?.pageIndex ?? 0;
+    const oldLastPage = Math.max(book.pages.length - 1, 1);
+    const newLastPage = Math.max(prepared.pages.length - 1, 0);
+    const migratedPage = Math.min(
+      newLastPage,
+      Math.round((oldPage / oldLastPage) * newLastPage),
+    );
+    const nextProgress = {
+      ...pendingProgress.current,
+      [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
+    };
+    const nextBook: Book = {
+      ...prepared,
+      paginationVersion: (book.paginationVersion ?? 0) + 1,
+    };
+
+    pendingProgress.current = nextProgress;
+    setProgress(nextProgress);
+    setCurrentBook(nextBook);
+    void saveProgress(nextProgress);
+    setBookmarks((items) => {
+      const next = migrateBookmarks(
+        items,
+        book.id,
+        book.pages.length,
+        nextBook.pages.length,
+      );
+      void saveBookmarks(next);
+      return next;
+    });    setAnnotations((items) => {
+      const next = migrateAnnotationsForPagination(items, book.id, nextBook.pages);
+      void saveAnnotations(next);
+      return next;
+    });
+
+    if (importedBooks.some((item) => item.id === book.id)) {
+      const nextBooks = importedBooks.map((item) =>
+        item.id === book.id ? nextBook : item,
+      );
+      setImportedBooks(nextBooks);
+      void saveImportedBooks(nextBooks);
+      void persistEpubPagination(nextBook);
+    }
+  });
+
+  const handleToggleBookmark = useEvent((
+    pageIndex: number,
+    chapterTitle: string,
+    excerpt: string,
+  ) => {
+    const book = currentBook;
+    if (!book) return;
+    setBookmarks((items) => {
+      const existing = items.find(
+        (bookmark) =>
+          bookmark.bookId === book.id &&
+          bookmark.chapterIndex === book.onlineChapterIndex &&
+          bookmark.pageIndex === pageIndex,
+      );
+      const next = existing
+        ? items.filter((bookmark) => bookmark.id !== existing.id)
+        : [
+            ...items,
+            {
+              id: `${book.id}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
+              bookId: book.id,
+              pageIndex,
+              chapterIndex: book.onlineChapterIndex,
+              chapterTitle,
+              excerpt,
+              createdAt: Date.now(),
+            },
+          ];
+      void saveBookmarks(next);
+      return next;
+    });
+  });
+
+  const removeBookmarksForBook = useEvent((bookId: string) => {
+    setBookmarks((items) => {
+      const next = items.filter((bookmark) => bookmark.bookId !== bookId);
+      if (next.length !== items.length) void saveBookmarks(next);
+      return next;
+    });
+  });
+
+  const handleSaveAnnotation = useEvent((annotation: ReaderAnnotation) => {
+    setAnnotations((items) => {
+      const index = items.findIndex((item) => item.id === annotation.id);
+      const next = index >= 0
+        ? items.map((item) => item.id === annotation.id ? annotation : item)
+        : [...items, annotation];
+      void saveAnnotations(next);
+      return next;
+    });
+  });
+
+  const handleDeleteAnnotation = useEvent((annotationId: string) => {
+    setAnnotations((items) => {
+      const next = items.filter((annotation) => annotation.id !== annotationId);
+      if (next.length !== items.length) void saveAnnotations(next);
+      return next;
+    });
+  });
+
+  const removeAnnotationsForBook = useEvent((bookId: string) => {
+    setAnnotations((items) => {
+      const next = items.filter((annotation) => annotation.bookId !== bookId);
+      if (next.length !== items.length) void saveAnnotations(next);
+      return next;
+    });
+  });
 
   const persistOnlineBook = async (book: Book) => {
     const current = onlineBooksRef.current;
@@ -613,6 +931,8 @@ function AppContent() {
           setOnlineBooks(next);
           void saveOnlineBooks(next);
           void deleteOnlineBookCache(book.id);
+          removeBookmarksForBook(book.id);
+          removeAnnotationsForBook(book.id);
         },
       },
     ]);
@@ -792,7 +1112,15 @@ function AppContent() {
   };
 
   const handlePageChange = (pageIndex: number) => {
-    if (!currentBook || !preferences.autoSync) return;
+    if (!currentBook) return;
+    const session = readingSessionRef.current;
+    if (session?.bookId === currentBook.id) {
+      if (session.lastPageIndex !== undefined && session.lastPageIndex !== pageIndex) {
+        session.pageTurns += 1;
+      }
+      session.lastPageIndex = pageIndex;
+    }
+    if (!preferences.autoSync) return;
     const next = {
       ...pendingProgress.current,
       [currentBook.id]: { pageIndex, updatedAt: Date.now() },
@@ -830,10 +1158,48 @@ function AppContent() {
     );
   };
 
+  const handleSetBookCoverColors = async (
+    book: Book,
+    colors: readonly [string, string],
+  ) => {
+    const next = {
+      ...bookAppearances,
+      [book.id]: { mode: "colors" as const, colors },
+    };
+    const previousImage = bookAppearances[book.id]?.imageUri;
+    setBookAppearances(next);
+    await saveBookAppearances(next);
+    await deleteBookCoverImage(previousImage);
+  };
+
+  const handlePickBookCoverImage = async (book: Book) => {
+    try {
+      const previousImage = bookAppearances[book.id]?.imageUri;
+      const imageUri = await pickBookCoverImage(book.id);
+
+      if (!imageUri) return false;
+      const next = {
+        ...bookAppearances,
+        [book.id]: { mode: "image" as const, imageUri },
+      };
+      setBookAppearances(next);
+      await saveBookAppearances(next);
+      await deleteBookCoverImage(previousImage);
+      return true;
+    } catch (error) {
+      Alert.alert(
+        "无法更换封面",
+        error instanceof Error ? error.message : "无法读取这张图片。",
+      );
+      return false;
+    }
+  };
   const handleDeleteBook = async (book: Book) => {
     try {
       const next = await deleteImportedBook(book, importedBooks);
       setImportedBooks(next);
+      removeBookmarksForBook(book.id);
+      removeAnnotationsForBook(book.id);
     } catch {
       Alert.alert("删除失败", "无法移除这本本地书籍。");
     }
@@ -865,6 +1231,8 @@ function AppContent() {
             const next = [...new Set([...hiddenSampleIds, book.id])];
             setHiddenSampleIds(next);
             void saveHiddenSampleBooks(next);
+            removeBookmarksForBook(book.id);
+            removeAnnotationsForBook(book.id);
           },
         },
       ]);
@@ -889,6 +1257,58 @@ function AppContent() {
     const created = createWebCaptureBook(extraction);
     closeWebReader();
     requestAnimationFrame(() => presentBook(created));
+  };
+
+  const handleExportBackup = async () => exportAppBackup();
+
+  const handleExportAnnotations = async () =>
+    exportAnnotationsMarkdown(annotations, [...sampleBooks, ...importedBooks, ...onlineBooks]);
+
+  const handleRestoreBackup = async () => {
+    const result = await restoreAppBackup();
+    if (result.canceled) return result;
+    const savedReadingGoal = await loadReadingGoal();
+    const [
+      savedPreferences,
+      localBooks,
+      savedOnlineBooks,
+      savedSources,
+      readingProgress,
+      hiddenSamples,
+      savedBookAppearances,
+      savedBookmarks,
+      savedAnnotations,
+      savedReadingStats,
+    ] = await Promise.all([
+      loadPreferences(),
+      loadImportedBooks(),
+      loadOnlineBooks(),
+      loadBookSources(),
+      loadProgress(),
+      loadHiddenSampleBooks(),
+      loadBookAppearances(),
+      loadBookmarks(),
+      loadAnnotations(),
+      loadReadingStats(),
+    ]);
+    preferencesRef.current = savedPreferences;
+    setPreferences(savedPreferences);
+    setImportedBooks(localBooks);
+    onlineBooksRef.current = savedOnlineBooks;
+    setOnlineBooks(savedOnlineBooks);
+    setSources(savedSources);
+    setProgress(readingProgress);
+    pendingProgress.current = readingProgress;
+    setHiddenSampleIds(hiddenSamples);
+    setBookAppearances(savedBookAppearances);
+    setBookmarks(savedBookmarks);
+    setAnnotations(savedAnnotations);
+    readingStatsRef.current = savedReadingStats;
+    setReadingStats(savedReadingStats);
+    setReadingGoalMinutes(savedReadingGoal);
+    void applyOrientation(savedPreferences.orientation);
+    void applyBrightness(savedPreferences);
+    return result;
   };
 
   const handleClearAppCache = async () => {
@@ -920,6 +1340,12 @@ function AppContent() {
   const handleVolumeKeys = () => {
     Alert.alert("当前设备暂不支持", "音量键翻页将在支持的设备上自动启用。");
   };
+  const handleReadingGoalChange = (minutes: number) => {
+    const normalized = Math.max(5, Math.min(180, Math.round(minutes / 5) * 5));
+    setReadingGoalMinutes(normalized);
+    void saveReadingGoal(normalized);
+  };
+
 
   const handleLanTransferAccept = async (request: LanTransferRequest) => {
     const book = await importBookFromUri(
@@ -942,9 +1368,12 @@ function AppContent() {
   const stableHandleRemoveCapturedBook = useEvent(handleRemoveCapturedBook);
   const stableHandleRemoveShelfBook = useEvent(handleRemoveShelfBook);
   const stableHandleRenameShelfBook = useEvent(handleRenameShelfBook);
+  const stableHandleSetBookCoverColors = useEvent(handleSetBookCoverColors);
+  const stableHandlePickBookCoverImage = useEvent(handlePickBookCoverImage);
   const stableHandleAddWebCapture = useEvent(handleAddWebCapture);
   const stableHandleReadWebCapture = useEvent(handleReadWebCapture);
   const stableHandleVolumeKeys = useEvent(handleVolumeKeys);
+  const stableHandleReadingGoalChange = useEvent(handleReadingGoalChange);
   const openSourceModal = useCallback(() => setSourceModalVisible(true), []);
   const openWebReader = useCallback(() => {
     setWebReaderInitialExtraction(undefined);
@@ -1001,13 +1430,17 @@ function AppContent() {
               >
                 <MemoHomeShelf
                   books={books}
+                  readingGoalMinutes={readingGoalMinutes}
+                  readingStats={readingStats}
                   importedCount={importedBooks.length}
                   onBrowseWeb={openWebReader}
                   onImport={stableHandleImport}
                   onOnline={openSourceModal}
                   onOpen={stableHandleOpenBook}
                   onRemove={stableHandleRemoveShelfBook}
+                  onPickCoverImage={stableHandlePickBookCoverImage}
                   onRename={stableHandleRenameShelfBook}
+                  onSetCoverColors={stableHandleSetBookCoverColors}
                 />
               </Reanimated.View>
 
@@ -1017,16 +1450,23 @@ function AppContent() {
                 style={[styles.tabPage, settingsPageStyle]}
               >
                 <MemoSettingsScreen
+                  books={books}
                   importedBooks={importedBooks}
                   onChange={stableUpdatePreferences}
                   onClearCache={stableHandleClearAppCache}
+                  onExportAnnotations={handleExportAnnotations}
+                  onExportBackup={handleExportBackup}
+                  onRestoreBackup={handleRestoreBackup}
                   onClearHistory={stableHandleClearHistory}
                   onDeleteBook={stableHandleDeleteBook}
                   onManageSources={openSourceModal}
                   onOpenGuide={() => setOnboardingVisible(true)}
                   onOpenLanTransfer={() => setLanTransferVisible(true)}
+                  onReadingGoalChange={stableHandleReadingGoalChange}
                   onVolumeKeysChange={stableHandleVolumeKeys}
                   preferences={preferences}
+                  readingGoalMinutes={readingGoalMinutes}
+                  readingStats={readingStats}
                   sourceCount={sources.length}
                 />
               </Reanimated.View>
@@ -1059,9 +1499,36 @@ function AppContent() {
             </View>
 
             {importing ? (
-              <View style={styles.importing}>
-                <ActivityIndicator color="#F7F4ED" />
-                <Text style={styles.importingText}>正在轻轻拆开这本书…</Text>
+              <View style={styles.importingOverlay}>
+                <View style={styles.importing}>
+                  <View style={styles.importingHeader}>
+                    <View style={styles.importingIcon}>
+                      <Ionicons name="book-outline" color="#EDF3EE" size={21} />
+                    </View>
+                    <View style={styles.importingCopy}>
+                      <Text style={styles.importingTitle}>正在导入书籍</Text>
+                      <Text numberOfLines={1} style={styles.importingText}>
+                        {importProgress?.message ?? "正在轻轻拆开这本书…"}
+                      </Text>
+                    </View>
+                    <Text style={styles.importingPercent}>
+                      {Math.round((importProgress?.progress ?? 0) * 100)}%
+                    </Text>
+                  </View>
+                  <View style={styles.importingTrack}>
+                    <Animated.View
+                      style={[
+                        styles.importingFill,
+                        {
+                          width: importProgressValue.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ["0%", "100%"],
+                          }),
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
               </View>
             ) : null}
           </SafeAreaView>
@@ -1100,6 +1567,14 @@ function AppContent() {
             ) : (
               <ReaderScreen
                 book={currentBook}
+                annotations={annotations.filter((annotation) =>
+                  annotation.bookId === currentBook.id &&
+                  annotation.chapterIndex === currentBook.onlineChapterIndex
+                )}
+                bookmarks={bookmarks.filter((bookmark) =>
+                  bookmark.bookId === currentBook.id &&
+                  bookmark.chapterIndex === currentBook.onlineChapterIndex
+                )}
                 canNextChapter={Boolean(onlineSession && onlineSession.index < onlineSession.chapters.length - 1)}
                 canPreviousChapter={Boolean(onlineSession && onlineSession.index > 0)}
                 initialPage={
@@ -1107,8 +1582,11 @@ function AppContent() {
                     ? (pendingProgress.current[currentBook.id]?.pageIndex ?? 0)
                     : (progress[currentBook.id]?.pageIndex ?? 0)
                 }
-                key={currentBook.id + "-" + String(currentBook.onlineChapterIndex ?? "local")}
+                key={`${currentBook.id}-${currentBook.onlineChapterIndex ?? "local"}-${currentBook.paginationVersion ?? 0}`}
                 onBack={closeReader}
+                onDeleteAnnotation={handleDeleteAnnotation}
+                onSaveAnnotation={handleSaveAnnotation}
+                onToggleBookmark={handleToggleBookmark}
                 downloadProgress={
                   downloadState?.bookId === currentBook.id ? downloadState : undefined
                 }
@@ -1117,6 +1595,7 @@ function AppContent() {
                 onDownloadAll={currentBook.format === "web" ? () => void handleDownloadAll() : undefined}
                 onOpenOriginal={currentBook.format === "webclip" ? openCapturedWebPage : undefined}
                 onPageChange={handlePageChange}
+                onPaginationMeasured={handlePaginationMeasured}
                 preferences={preferences}
               />
             )}
@@ -1237,21 +1716,40 @@ const styles = StyleSheet.create({
   },
   navLabel: { color: "#92958F", fontSize: 10, fontWeight: "700" },
   navLabelActive: { color: "#496052" },
-  importing: {
+  importingOverlay: {
     alignItems: "center",
-    backgroundColor: "#26342D",
-    borderRadius: 16,
-    elevation: 18,
-    flexDirection: "row",
-    gap: 10,
-    left: 38,
-    paddingHorizontal: 18,
-    paddingVertical: 15,
+    backgroundColor: "rgba(26, 34, 29, 0.2)",
+    bottom: 0,
+    justifyContent: "center",
+    left: 0,
     position: "absolute",
-    right: 38,
-    top: "45%",
+    right: 0,
+    top: 0,
+    zIndex: 30,
   },
-  importingText: { color: "#F7F4ED", flex: 1, fontSize: 13, fontWeight: "600" },
+  importing: {
+    backgroundColor: "#26342D",
+    borderColor: "#FFFFFF24",
+    borderRadius: 22,
+    borderWidth: 1,
+    elevation: 18,
+    maxWidth: 430,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    shadowColor: "#18221C",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    width: "84%",
+  },
+  importingHeader: { alignItems: "center", flexDirection: "row" },
+  importingIcon: { alignItems: "center", backgroundColor: "#496655", borderRadius: 15, height: 42, justifyContent: "center", width: 42 },
+  importingCopy: { flex: 1, marginLeft: 12, minWidth: 0 },
+  importingTitle: { color: "#F8F4EA", fontSize: 14, fontWeight: "800" },
+  importingText: { color: "#AEBBB3", fontSize: 11, marginTop: 4 },
+  importingPercent: { color: "#F2E6C9", fontSize: 14, fontVariant: ["tabular-nums"], fontWeight: "900", marginLeft: 12 },
+  importingTrack: { backgroundColor: "#FFFFFF24", borderRadius: 4, height: 7, marginTop: 16, overflow: "hidden" },
+  importingFill: { backgroundColor: "#A9C4B3", borderRadius: 4, height: "100%" },
   onlineLoading: {
     alignItems: "center",
     backgroundColor: "#17201977",

@@ -3,29 +3,48 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { memo,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState } from "react";
 import { FlatList,
+  Animated,
+  Easing,
+  ImageBackground,
   Pressable,
+  ScrollView,
   StyleSheet,
   useWindowDimensions,
   View,
 } from "react-native";
-import { Text, TextInput } from "../i18n";
+import { Text, TextInput, useI18n } from "../i18n";
 import type { DimensionValue } from "react-native";
 
 import { IOSPopupModal } from "../components/IOSPopupModal";
+import { ReadingInsightsModal } from "../components/ReadingInsightsModal";
+import { summarizeReadingStats, type ReadingStats } from "../services/readingStats";
 import type { Book } from "../types";
+import {
+  defaultLibraryViewPreferences,
+  loadLibraryViewPreferences,
+  saveLibraryViewPreferences,
+  type ShelfFilter,
+  type ShelfSort,
+} from "../services/libraryView";
 
 type HomeShelfProps = {
   books: Book[];
   importedCount: number;
+  readingGoalMinutes: number;
+  readingStats: ReadingStats;
   onBrowseWeb: () => void;
   onImport: () => void;
   onOnline: () => void;
   onOpen: (book: Book) => void;
   onRemove: (book: Book) => void;
   onRename: (book: Book, title: string) => Promise<void>;
+  onPickCoverImage: (book: Book) => Promise<boolean>;
+  onSetCoverColors: (book: Book, colors: readonly [string, string]) => Promise<void>;
 };
 
 type ShelfListItem =
@@ -39,21 +58,113 @@ const coverColors = [
   ["#7A7353", "#373421"],
 ] as const;
 
+const colorChoices = [
+  "#24382F", "#3F6653", "#789181", "#B4C7B8", "#E7EEE7",
+  "#352B27", "#6A4438", "#A66E53", "#D8A978", "#F0D5AA",
+  "#273746", "#506B82", "#819CB4", "#B9CDDC", "#E5EDF2",
+  "#302E25", "#686143", "#999068", "#C8BE92", "#EEE5C7",
+] as const;
+
+const FILTER_OPTION_WIDTH = 62;
+
 export function HomeShelf({
   books,
   importedCount,
   onBrowseWeb,
+  readingGoalMinutes,
+  readingStats,
   onImport,
   onOnline,
   onOpen,
   onRemove,
   onRename,
+  onPickCoverImage,
+  onSetCoverColors,
 }: HomeShelfProps) {
+  const { resolvedLanguage } = useI18n();
   const { width } = useWindowDimensions();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [shelfFilter, setShelfFilter] = useState<ShelfFilter>(defaultLibraryViewPreferences.filter);
+  const [shelfSort, setShelfSort] = useState<ShelfSort>(defaultLibraryViewPreferences.sort);
+  const [sortVisible, setSortVisible] = useState(false);
+  const filterProgress = useRef(new Animated.Value(0)).current;
   const [renameBook, setRenameBook] = useState<Book>();
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const [coverBook, setCoverBook] = useState<Book>();
+  const [coverVisible, setCoverVisible] = useState(false);
+  const [coverColorsValue, setCoverColorsValue] = useState<[string, string]>(["#365447", "#182A22"]);
+  const [activeColor, setActiveColor] = useState<0 | 1>(0);
+  const [savingCover, setSavingCover] = useState(false);
+
+  const [insightsVisible, setInsightsVisible] = useState(false);
+  const readingSummary = useMemo(() => summarizeReadingStats(readingStats), [readingStats]);
+  const goalRatio = Math.max(
+    0,
+    Math.min(1, readingSummary.todayMs / (readingGoalMinutes * 60_000)),
+  );
+  const goalProgress = useRef(new Animated.Value(goalRatio)).current;
+  useEffect(() => {
+
+    Animated.timing(goalProgress, {
+      duration: 360,
+      easing: Easing.bezier(0.22, 1, 0.36, 1),
+      toValue: goalRatio,
+      useNativeDriver: false,
+    }).start();
+  }, [goalProgress, goalRatio]);
+
+  useEffect(() => {
+    let active = true;
+    void loadLibraryViewPreferences().then((saved) => {
+      if (!active) return;
+      setShelfFilter(saved.filter);
+      setShelfSort(saved.sort);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const filterIndex = shelfFilter === "local" ? 1 : shelfFilter === "web" ? 2 : 0;
+    Animated.timing(filterProgress, {
+      toValue: filterIndex,
+      duration: 210,
+      easing: Easing.bezier(0.22, 1, 0.36, 1),
+      useNativeDriver: true,
+    }).start();
+  }, [filterProgress, shelfFilter]);
+
+  const updateShelfFilter = useCallback((filter: ShelfFilter) => {
+    setShelfFilter(filter);
+    void saveLibraryViewPreferences({ filter, sort: shelfSort });
+  }, [shelfSort]);
+
+  const updateShelfSort = useCallback((sort: ShelfSort) => {
+    setShelfSort(sort);
+    setSortVisible(false);
+    void saveLibraryViewPreferences({ filter: shelfFilter, sort });
+  }, [shelfFilter]);
+
+  const shelfFilterOptions = useMemo<Array<{ key: ShelfFilter; label: string }>>(
+    () => [
+      { key: "all", label: resolvedLanguage === "en" ? "All" : "»´≤ø" },
+      { key: "local", label: resolvedLanguage === "en" ? "Local" : "±æµÿ" },
+      { key: "web", label: resolvedLanguage === "en" ? "Web" : "Õ¯“≥" },
+    ],
+    [resolvedLanguage],
+  );
+  const shelfSortLabels = useMemo<Record<ShelfSort, string>>(
+    () => ({
+      recent: resolvedLanguage === "en" ? "Recently read" : "◊ÓΩ¸‘ƒ∂¡",
+      title: resolvedLanguage === "en" ? "Book title" : " È√˚≈≈–Ú",
+      progress: resolvedLanguage === "en" ? "Reading progress" : "‘ƒ∂¡Ω¯∂»",
+    }),
+    [resolvedLanguage],
+  );
+
   const beginRename = useCallback((book: Book) => {
     setRenameBook(book);
     setRenameValue(book.title);
@@ -69,7 +180,43 @@ export function HomeShelf({
       setRenaming(false);
     }
   }, [onRename, renameBook, renameValue, renaming]);
-  const isTablet = width >= 700;
+  const beginCoverEdit = useCallback((book: Book) => {
+    setCoverBook(book);
+    setCoverColorsValue([
+      normalizeHexColor(book.coverColors[0]) ?? "#365447",
+      normalizeHexColor(book.coverColors[1]) ?? "#182A22",
+    ]);
+    setActiveColor(0);
+    setCoverVisible(true);
+  }, []);
+  const chooseColor = useCallback((color: string) => {
+    setCoverColorsValue((current) => {
+      const next: [string, string] = [...current];
+      next[activeColor] = color;
+      return next;
+    });
+  }, [activeColor]);
+  const finishCoverColors = useCallback(async () => {
+    const first = normalizeHexColor(coverColorsValue[0]);
+    const second = normalizeHexColor(coverColorsValue[1]);
+    if (!coverBook || !first || !second || savingCover) return;
+    setSavingCover(true);
+    try {
+      await onSetCoverColors(coverBook, [first, second]);
+      setCoverVisible(false);
+    } finally {
+      setSavingCover(false);
+    }
+  }, [coverBook, coverColorsValue, onSetCoverColors, savingCover]);
+  const chooseCoverImage = useCallback(async () => {
+    if (!coverBook || savingCover) return;
+    setSavingCover(true);
+    try {
+      if (await onPickCoverImage(coverBook)) setCoverVisible(false);
+    } finally {
+      setSavingCover(false);
+    }
+  }, [coverBook, onPickCoverImage, savingCover]);  const isTablet = width >= 700;
   const columns = width >= 1120 ? 3 : isTablet ? 2 : 1;
   const contentWidth = Math.min(width, 1180);
   const contentPadding = isTablet ? 28 : 18;
@@ -77,16 +224,45 @@ export function HomeShelf({
   const cardWidth =
     (contentWidth - contentPadding * 2 - columnGap * (columns - 1)) / columns;
 
+  const visibleBooks = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+    const originalOrder = new Map(books.map((book, index) => [book.id, index]));
+    return books
+      .filter((book) => {
+        if (shelfFilter === "local" && (book.format === "web" || book.format === "webclip")) {
+          return false;
+        }
+        if (shelfFilter === "web" && book.format !== "web" && book.format !== "webclip") {
+          return false;
+        }
+        if (!normalizedQuery) return true;
+        return [book.title, book.author, book.currentChapter]
+          .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
+      })
+      .sort((left, right) => {
+        if (shelfSort === "title") {
+          return left.title.localeCompare(right.title, resolvedLanguage === "en" ? "en" : "zh-CN");
+        }
+        if (shelfSort === "progress") {
+          return right.progress - left.progress || left.title.localeCompare(right.title);
+        }
+        return (right.lastOpenedAt ?? 0) - (left.lastOpenedAt ?? 0)
+          || (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0);
+      });
+  }, [books, resolvedLanguage, searchQuery, shelfFilter, shelfSort]);
+
   const items = useMemo<ShelfListItem[]>(
     () => [
-      ...books.map((book, colorIndex) => ({
+      ...visibleBooks.map((book, colorIndex) => ({
         kind: "book" as const,
         book,
         colorIndex,
       })),
-      { kind: "import" as const },
+      ...(!searchQuery.trim() && shelfFilter === "all"
+        ? [{ kind: "import" as const }]
+        : []),
     ],
-    [books],
+    [searchQuery, shelfFilter, visibleBooks],
   );
 
   const renderItem = useCallback(
@@ -100,11 +276,12 @@ export function HomeShelf({
           onOpen={onOpen}
           onRemove={onRemove}
           onRename={beginRename}
+          onEditCover={beginCoverEdit}
         />
       ) : (
         <ImportCard cardWidth={cardWidth} onImport={onImport} />
       ),
-    [beginRename, cardWidth, isTablet, onImport, onOpen, onRemove],
+    [beginCoverEdit, beginRename, cardWidth, isTablet, onImport, onOpen, onRemove],
   );
 
   return (
@@ -169,6 +346,41 @@ export function HomeShelf({
             </View>
           </View>
         </LinearGradient>
+        <Pressable
+          accessibilityLabel={resolvedLanguage === "en" ? "Open today's reading trace" : "\u67e5\u770b\u4eca\u65e5\u9605\u8bfb\u8db3\u8ff9"}
+          onPress={() => setInsightsVisible(true)}
+          style={({ pressed }) => [
+            styles.todayCard,
+            isTablet && styles.todayCardTablet,
+            pressed && styles.todayCardPressed,
+          ]}
+        >
+          <View style={styles.todayIcon}>
+            <Ionicons name="footsteps-outline" color="#486555" size={18} />
+          </View>
+          <View style={styles.todayCopy}>
+            <View style={styles.todayHeading}>
+              <Text style={styles.todayTitle}>
+                {resolvedLanguage === "en" ? "Today's reading" : "\u4eca\u65e5\u9605\u8bfb"}
+              </Text>
+              <Text style={styles.todayValue}>
+                {Math.floor(readingSummary.todayMs / 60_000)} / {readingGoalMinutes}
+                {resolvedLanguage === "en" ? " min" : " \u5206\u949f"}
+              </Text>
+            </View>
+            <View style={styles.todayTrack}>
+              <Animated.View
+                style={[
+                  styles.todayFill,
+                  goalRatio >= 1 && styles.todayFillComplete,
+                  { width: goalProgress.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }) },
+                ]}
+              />
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" color="#8B958E" size={16} />
+        </Pressable>
+
 
         <View style={styles.sectionHeader}>
           <View>
@@ -178,6 +390,75 @@ export function HomeShelf({
           <View style={styles.layoutBadge}>
             <Ionicons name={columns > 1 ? "grid-outline" : "list-outline"} color="#6D7E74" size={14} />
             <Text style={styles.layoutText}>{columns > 1 ? columns + " Âàó" : "Á¥ßÂáëÂàóË°®"}</Text>
+          </View>
+        </View>
+        <View style={[styles.shelfTools, isTablet && styles.shelfToolsTablet]}>
+          <View style={styles.shelfSearchBox}>
+            <Ionicons name="search-outline" color="#617269" size={18} />
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setSearchQuery}
+              placeholder={resolvedLanguage === "en" ? "Search title, author, or chapter" : "—∞’“ È√˚°¢◊˜’ﬂªÚ’¬Ω⁄"}
+              placeholderTextColor="#9A9D96"
+              returnKeyType="search"
+              selectionColor="#466554"
+              style={styles.shelfSearchInput}
+              value={searchQuery}
+            />
+            {searchQuery ? (
+              <Pressable
+                accessibilityLabel={resolvedLanguage === "en" ? "Clear library search" : "«Â≥˝ Èº‹À—À˜"}
+                hitSlop={10}
+                onPress={() => setSearchQuery("")}
+              >
+                <Ionicons name="close-circle" color="#8B938D" size={19} />
+              </Pressable>
+            ) : null}
+          </View>
+          <View style={styles.shelfToolRow}>
+            <View style={styles.shelfFilterControl}>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.shelfFilterIndicator,
+                  {
+                    transform: [{
+                      translateX: filterProgress.interpolate({
+                        inputRange: [0, 1, 2],
+                        outputRange: [0, FILTER_OPTION_WIDTH, FILTER_OPTION_WIDTH * 2],
+                      }),
+                    }],
+                  },
+                ]}
+              />
+              {shelfFilterOptions.map((option) => {
+                const active = option.key === shelfFilter;
+                return (
+                  <Pressable
+                    accessibilityState={{ selected: active }}
+                    key={option.key}
+                    onPress={() => updateShelfFilter(option.key)}
+                    style={({ pressed }) => [styles.shelfFilterOption, pressed && styles.toolPressed]}
+                  >
+                    <Text style={[styles.shelfFilterLabel, active && styles.shelfFilterLabelActive]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              accessibilityLabel={resolvedLanguage === "en" ? "Choose library sort order" : "—°‘Ò Èº‹≈≈–Ú"}
+              onPress={() => setSortVisible(true)}
+              style={({ pressed }) => [styles.shelfSortButton, pressed && styles.toolPressed]}
+            >
+              <Ionicons name="swap-vertical-outline" color="#4E685A" size={17} />
+              <Text numberOfLines={1} style={styles.shelfSortText}>
+                {shelfSortLabels[shelfSort]}
+              </Text>
+              <Ionicons name="chevron-down" color="#7C8981" size={14} />
+            </Pressable>
           </View>
         </View>
       </View>
@@ -194,6 +475,32 @@ export function HomeShelf({
         data={items}
         initialNumToRender={columns * 4}
         key={"shelf-" + columns}
+        ListEmptyComponent={(
+          <View style={styles.shelfEmpty}>
+            <View style={styles.shelfEmptyIcon}>
+              <Ionicons name="library-outline" color="#6C8175" size={25} />
+            </View>
+            <Text style={styles.shelfEmptyTitle}>
+              {resolvedLanguage === "en" ? "No story found here" : "’‚¿Ôªπ√ª”–—∞µΩπ  ¬"}
+            </Text>
+            <Text style={styles.shelfEmptyText}>
+              {resolvedLanguage === "en"
+                ? "Try another title, or return to the whole library."
+                : "ªª“ª∏ˆ√˚◊÷ ‘ ‘£¨ªÚªÿµΩ»´≤ø≤ÿ È°£"}
+            </Text>
+            <Pressable
+              onPress={() => {
+                setSearchQuery("");
+                updateShelfFilter("all");
+              }}
+              style={styles.shelfEmptyAction}
+            >
+              <Text style={styles.shelfEmptyActionText}>
+                {resolvedLanguage === "en" ? "Show all books" : "ø¥ø¥»´≤ø≤ÿ È"}
+              </Text>
+            </Pressable>
+          </View>
+        )}
         keyExtractor={(item) => item.kind === "book" ? item.book.id : "import-book"}
         maxToRenderPerBatch={columns * 4}
         numColumns={columns}
@@ -204,6 +511,47 @@ export function HomeShelf({
         updateCellsBatchingPeriod={32}
         windowSize={6}
       />
+
+      <IOSPopupModal
+        onRequestClose={() => setSortVisible(false)}
+        visible={sortVisible}
+      >
+        <View style={styles.sortCard}>
+          <View style={styles.sortHeader}>
+            <View style={styles.sortIcon}>
+              <Ionicons name="swap-vertical-outline" color="#486555" size={20} />
+            </View>
+            <View>
+              <Text style={styles.sortTitle}>
+                {resolvedLanguage === "en" ? "Arrange the shelf" : "Œ™≤ÿ È≈≈“ª≈≈"}
+              </Text>
+              <Text style={styles.sortSubtitle}>
+                {resolvedLanguage === "en" ? "Choose how stories meet you." : "—°‘Òπ  ¬”Îƒ„œ‡”ˆµƒ¥Œ–Ú°£"}
+              </Text>
+            </View>
+          </View>
+          {(["recent", "title", "progress"] as ShelfSort[]).map((sort) => {
+            const active = sort === shelfSort;
+            return (
+              <Pressable
+                key={sort}
+                onPress={() => updateShelfSort(sort)}
+                style={[styles.sortOption, active && styles.sortOptionActive]}
+              >
+                <Ionicons
+                  name={sort === "recent" ? "time-outline" : sort === "title" ? "text-outline" : "analytics-outline"}
+                  color={active ? "#3F6552" : "#748078"}
+                  size={19}
+                />
+                <Text style={[styles.sortOptionText, active && styles.sortOptionTextActive]}>
+                  {shelfSortLabels[sort]}
+                </Text>
+                <Ionicons name={active ? "checkmark-circle" : "ellipse-outline"} color={active ? "#4A705D" : "#B4B9B4"} size={19} />
+              </Pressable>
+            );
+          })}
+        </View>
+      </IOSPopupModal>
 
       <IOSPopupModal
         onDismiss={() => setRenameBook(undefined)}
@@ -233,6 +581,96 @@ export function HomeShelf({
             </View>
           </View>
       </IOSPopupModal>
+
+      <IOSPopupModal
+        onDismiss={() => setCoverBook(undefined)}
+        onRequestClose={() => setCoverVisible(false)}
+        visible={coverVisible}
+      >
+        <ScrollView contentContainerStyle={styles.coverEditorContent} showsVerticalScrollIndicator={false} style={styles.coverEditorCard}>
+          <View style={styles.coverEditorHeader}>
+            <View style={styles.renameIcon}><Ionicons name="color-palette-outline" color="#486555" size={21} /></View>
+            <View style={styles.coverEditorHeading}>
+              <Text style={styles.renameTitle}>Ë£ÖÁÇπ‰π¶Â∞Å</Text>
+              <Text style={styles.renameHint}>‰∏∫ÊïÖ‰∫ãÊåë‰∏§ÁßçÈ¢úËâ≤ÔºåÊàñÁïô‰∏ã‰∏ÄÂπÖÁîª</Text>
+            </View>
+          </View>
+
+          {coverBook ? (
+            <View style={styles.coverEditorPreviewRow}>
+              <View style={styles.coverEditorPreview}>
+                <LinearGradient colors={coverColorsValue} style={styles.coverEditorPreviewFace}>
+                  <View style={styles.coverSpine} />
+                  <Text numberOfLines={3} style={styles.coverEditorPreviewTitle}>{coverBook.title}</Text>
+                  <Text numberOfLines={1} style={styles.coverEditorPreviewAuthor}>{coverBook.author}</Text>
+                </LinearGradient>
+              </View>
+              <View style={styles.coverEditorIntro}>
+                <Text style={styles.coverEditorLabel}>Ê∏êÂèòÈ¢úËâ≤</Text>
+                <Text style={styles.coverEditorCopy}>ÁÇπÂáª‚ÄúËµ∑Ëâ≤‚ÄùÊàñ‚ÄúËêΩËâ≤‚ÄùÔºåÂÜç‰ªéËâ≤Êùø‰∏≠ÈÄâÂèñ„ÄÇ‰πüÂèØ‰ª•Áõ¥Êé•ËæìÂÖ• HEX Ëâ≤ÂÄº„ÄÇ</Text>
+                <Pressable onPress={() => void chooseCoverImage()} style={styles.imageCoverButton}>
+                  <Ionicons name="image-outline" color="#F8F4EA" size={18} />
+                  <Text style={styles.imageCoverButtonText}>{savingCover ? "Ê≠£Âú®ÊâìÂºÄ‚Ä¶" : "ÈÄâÊã©ÂõæÁâá"}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.colorSlotRow}>
+            {coverColorsValue.map((color, index) => (
+              <Pressable
+                key={index}
+                onPress={() => setActiveColor(index as 0 | 1)}
+                style={[styles.colorSlot, activeColor === index && styles.colorSlotActive]}
+              >
+                <View style={[styles.colorSlotDot, { backgroundColor: normalizeHexColor(color) ?? "#FFFFFF" }]} />
+                <Text style={styles.colorSlotLabel}>{index === 0 ? "Ëµ∑Ëâ≤" : "ËêΩËâ≤"}</Text>
+                <TextInput
+                  autoCapitalize="characters"
+                  maxLength={7}
+                  onChangeText={(value) => setCoverColorsValue((current) => {
+                    const next: [string, string] = [...current];
+                    next[index] = value;
+                    return next;
+                  })}
+                  onFocus={() => setActiveColor(index as 0 | 1)}
+                  style={styles.colorHexInput}
+                  value={color}
+                />
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={styles.colorGrid}>
+            {colorChoices.map((color) => (
+              <Pressable
+                accessibilityLabel={`ÈÄâÊã©È¢úËâ≤ ${color}`}
+                key={color}
+                onPress={() => chooseColor(color)}
+                style={[styles.colorChoice, { backgroundColor: color }]}
+              />
+            ))}
+          </View>
+
+          <View style={styles.renameActions}>
+            <Pressable onPress={() => setCoverVisible(false)} style={styles.renameCancel}><Text style={styles.renameCancelText}>ÂèñÊ∂à</Text></Pressable>
+            <Pressable
+              disabled={!normalizeHexColor(coverColorsValue[0]) || !normalizeHexColor(coverColorsValue[1]) || savingCover}
+              onPress={() => void finishCoverColors()}
+              style={[styles.renameSave, (!normalizeHexColor(coverColorsValue[0]) || !normalizeHexColor(coverColorsValue[1]) || savingCover) && styles.renameDisabled]}
+            >
+      <ReadingInsightsModal
+        books={books}
+        onClose={() => setInsightsVisible(false)}
+        stats={readingStats}
+        visible={insightsVisible}
+      />
+
+              <Text style={styles.renameSaveText}>{savingCover ? "Ê≠£Âú®‰øùÂ≠ò‚Ä¶" : "‰ΩøÁî®ËøôÁªÑÈ¢úËâ≤"}</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </IOSPopupModal>
     </View>
   );
 }
@@ -245,6 +683,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
   onOpen,
   onRemove,
   onRename,
+  onEditCover,
 }: {
   book: Book;
   cardWidth: number;
@@ -253,6 +692,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
   onOpen: (book: Book) => void;
   onRemove: (book: Book) => void;
   onRename: (book: Book) => void;
+  onEditCover: (book: Book) => void;
 }) {
   const openBook = useCallback(() => onOpen(book), [book, onOpen]);
   const progress = Math.max(0, Math.min(book.progress, 100));
@@ -264,7 +704,7 @@ const ShelfBookCard = memo(function ShelfBookCard({
         accessibilityLabel={
           book.title + "Ôºå" + book.author + "ÔºåÈòÖËØªËøõÂ∫¶ " + Math.round(progress) + "%"
         }
-        onLongPress={() => book.format !== "sample" && onRename(book)}
+        onLongPress={() => book.format === "sample" ? onEditCover(book) : onRename(book)}
         onPress={openBook}
         style={({ pressed }) => [
           styles.card,
@@ -274,22 +714,11 @@ const ShelfBookCard = memo(function ShelfBookCard({
       >
         <View pointerEvents="none" style={styles.cardTopLine} />
         <View style={[styles.coverFrame, isTablet && styles.coverFrameTablet]}>
-          <LinearGradient
+          <ShelfCoverFace
+            book={book}
             colors={book.coverColors ?? coverColors[colorIndex % coverColors.length]}
-            end={{ x: 1, y: 1 }}
-            start={{ x: 0, y: 0 }}
-            style={styles.cover}
-          >
-            <View style={styles.coverSpine} />
-            <View style={styles.coverInnerLine} />
-            <Text style={styles.coverMonogram}>Â¢®</Text>
-            <View style={styles.coverRule} />
-            <Text numberOfLines={3} style={styles.coverTitle}>{book.title}</Text>
-            <Text numberOfLines={1} style={styles.coverAuthor}>{book.author}</Text>
-            <View style={styles.formatPill}>
-              <Text style={styles.formatText}>{formatLabel}</Text>
-            </View>
-          </LinearGradient>
+            formatLabel={formatLabel}
+          />
         </View>
 
         <View style={styles.bookInfo}>
@@ -320,6 +749,17 @@ const ShelfBookCard = memo(function ShelfBookCard({
         </View>
 
         <View style={styles.cardActions}>
+          <Pressable
+            accessibilityLabel={"‰øÆÊîπÂ∞ÅÈù¢ " + book.title}
+            hitSlop={6}
+            onPress={(event) => {
+              event.stopPropagation();
+              onEditCover(book);
+            }}
+            style={styles.cardActionButton}
+          >
+            <Ionicons name="color-palette-outline" color="#65786D" size={15} />
+          </Pressable>
           {book.format !== "sample" ? (
             <Pressable
               accessibilityLabel={"ÈáçÂëΩÂêç" + book.title}
@@ -350,6 +790,59 @@ const ShelfBookCard = memo(function ShelfBookCard({
   );
 });
 
+const ShelfCoverFace = memo(function ShelfCoverFace({
+  book,
+  colors,
+  formatLabel,
+}: {
+  book: Book;
+  colors: readonly [string, string, ...string[]];
+  formatLabel: string;
+}) {
+  const imageUri = book.coverMode === "image"
+    ? book.coverImageUri
+    : book.coverMode === "colors"
+      ? undefined
+      : book.coverUrl;
+  const content = (
+    <>
+      <View style={styles.coverSpine} />
+      <View style={styles.coverInnerLine} />
+      <Text style={styles.coverMonogram}>Â¢®</Text>
+      <View style={styles.coverRule} />
+      <Text numberOfLines={3} style={styles.coverTitle}>{book.title}</Text>
+      <Text numberOfLines={1} style={styles.coverAuthor}>{book.author}</Text>
+      <View style={styles.formatPill}>
+        <Text style={styles.formatText}>{formatLabel}</Text>
+      </View>
+    </>
+  );
+
+  if (imageUri) {
+    return (
+      <ImageBackground
+        imageStyle={styles.coverImage}
+        resizeMode="cover"
+        source={{ uri: imageUri }}
+        style={styles.cover}
+      >
+        <View style={styles.coverImageShade} />
+        {content}
+      </ImageBackground>
+    );
+  }
+
+  return (
+    <LinearGradient
+      colors={colors}
+      end={{ x: 1, y: 1 }}
+      start={{ x: 0, y: 0 }}
+      style={styles.cover}
+    >
+      {content}
+    </LinearGradient>
+  );
+});
 const ImportCard = memo(function ImportCard({
   cardWidth,
   onImport,
@@ -382,6 +875,14 @@ const ImportCard = memo(function ImportCard({
   );
 });
 
+function normalizeHexColor(value: string) {
+  const normalized = value.trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(normalized)) return normalized;
+  if (/^#[0-9A-F]{3}$/.test(normalized)) {
+    return "#" + normalized.slice(1).split("").map((item) => item + item).join("");
+  }
+  return undefined;
+}
 function getFormatLabel(book: Book) {
   if (book.format === "sample") return "Á≤æÈÄâ";
   if (book.format === "web") return book.fullyDownloaded ? "Á¶ªÁ∫ø" : "Âú®Á∫ø";
@@ -465,6 +966,22 @@ const styles = StyleSheet.create({
     top: 1,
   },
   statBlock: { minWidth: 62 },
+  todayCard: {
+    alignItems: "center", backgroundColor: "#FAF8F2", borderColor: "#DDD9D0",
+    borderRadius: 17, borderWidth: 1, elevation: 1, flexDirection: "row",
+    marginHorizontal: 20, marginTop: 10, minHeight: 58, paddingHorizontal: 13,
+    shadowColor: "#27382F", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.04, shadowRadius: 6,
+  },
+  todayCardTablet: { marginHorizontal: 28, minHeight: 62, paddingHorizontal: 16 },
+  todayCardPressed: { opacity: 0.78, transform: [{ scale: 0.995 }] },
+  todayIcon: { alignItems: "center", backgroundColor: "#E8EFEB", borderRadius: 12, height: 36, justifyContent: "center", width: 36 },
+  todayCopy: { flex: 1, marginHorizontal: 11 },
+  todayHeading: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  todayTitle: { color: "#3C443F", fontSize: 11.5, fontWeight: "800" },
+  todayValue: { color: "#6F7D75", fontSize: 9.5, fontWeight: "700" },
+  todayTrack: { backgroundColor: "#E2E6E1", borderRadius: 4, height: 5, marginTop: 7, overflow: "hidden" },
+  todayFill: { backgroundColor: "#799487", borderRadius: 4, height: 5 },
+  todayFillComplete: { backgroundColor: "#416451" },
   summaryNumber: { color: "#2F4037", fontSize: 23, fontWeight: "900" },
   summaryLabel: { color: "#81877F", fontSize: 10, fontWeight: "600", marginTop: 1 },
   summaryDivider: { backgroundColor: "#C4C9C1", height: 40, marginHorizontal: 15, width: 1.5 },
@@ -504,6 +1021,185 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   layoutText: { color: "#727B75", fontSize: 9.5, fontWeight: "700" },
+  shelfTools: {
+    gap: 8,
+    paddingBottom: 13,
+    paddingHorizontal: 18,
+  },
+  shelfToolsTablet: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    paddingHorizontal: 28,
+  },
+  shelfSearchBox: {
+    alignItems: "center",
+    backgroundColor: "#FBF9F4",
+    borderColor: "#D4D5CE",
+    borderRadius: 17,
+    borderWidth: 1,
+    elevation: 1,
+    flex: 1,
+    flexDirection: "row",
+    gap: 9,
+    minHeight: 46,
+    paddingHorizontal: 13,
+    shadowColor: "#26372E",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+  },
+  shelfSearchInput: {
+    color: "#303A34",
+    flex: 1,
+    fontSize: 13,
+    minHeight: 44,
+    paddingVertical: 0,
+  },
+  shelfToolRow: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "space-between",
+  },
+  shelfFilterControl: {
+    backgroundColor: "#E2E5DF",
+    borderColor: "#D1D5CE",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    height: 42,
+    overflow: "hidden",
+    padding: 3,
+    width: FILTER_OPTION_WIDTH * 3 + 6,
+  },
+  shelfFilterIndicator: {
+    backgroundColor: "#FDFBF6",
+    borderColor: "#C8D0C9",
+    borderRadius: 13,
+    borderWidth: 1,
+    elevation: 2,
+    height: 34,
+    left: 3,
+    position: "absolute",
+    shadowColor: "#25362D",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    top: 3,
+    width: FILTER_OPTION_WIDTH,
+  },
+  shelfFilterOption: {
+    alignItems: "center",
+    height: 34,
+    justifyContent: "center",
+    width: FILTER_OPTION_WIDTH,
+  },
+  shelfFilterLabel: {
+    color: "#7B847E",
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  shelfFilterLabelActive: { color: "#3F6250", fontWeight: "900" },
+  shelfSortButton: {
+    alignItems: "center",
+    backgroundColor: "#E8EBE6",
+    borderColor: "#D0D5CF",
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: "row",
+    gap: 6,
+    height: 42,
+    justifyContent: "center",
+    minWidth: 142,
+    paddingHorizontal: 10,
+  },
+  shelfSortText: {
+    color: "#52665B",
+    flexShrink: 1,
+    fontSize: 10.5,
+    fontWeight: "800",
+  },
+  toolPressed: { opacity: 0.78, transform: [{ scale: 0.97 }] },
+  shelfEmpty: {
+    alignItems: "center",
+    minHeight: 250,
+    paddingHorizontal: 24,
+    paddingTop: 42,
+  },
+  shelfEmptyIcon: {
+    alignItems: "center",
+    backgroundColor: "#E4E9E3",
+    borderRadius: 22,
+    height: 50,
+    justifyContent: "center",
+    width: 50,
+  },
+  shelfEmptyTitle: {
+    color: "#39483F",
+    fontSize: 15,
+    fontWeight: "800",
+    marginTop: 14,
+  },
+  shelfEmptyText: {
+    color: "#8A918C",
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 6,
+    textAlign: "center",
+  },
+  shelfEmptyAction: {
+    backgroundColor: "#416451",
+    borderRadius: 15,
+    marginTop: 17,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+  },
+  shelfEmptyActionText: { color: "#F8F4EA", fontSize: 11, fontWeight: "800" },
+  sortCard: {
+    backgroundColor: "#FBF9F4",
+    borderRadius: 28,
+    elevation: 24,
+    maxWidth: 480,
+    padding: 20,
+    shadowColor: "#142018",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.24,
+    shadowRadius: 24,
+    width: "100%",
+  },
+  sortHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 14,
+  },
+  sortIcon: {
+    alignItems: "center",
+    backgroundColor: "#E5ECE6",
+    borderRadius: 16,
+    height: 44,
+    justifyContent: "center",
+    width: 44,
+  },
+  sortTitle: { color: "#303A34", fontSize: 19, fontWeight: "900" },
+  sortSubtitle: { color: "#92958F", fontSize: 10.5, marginTop: 3 },
+  sortOption: {
+    alignItems: "center",
+    borderColor: "#E2E2DB",
+    borderRadius: 17,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 11,
+    marginTop: 8,
+    minHeight: 54,
+    paddingHorizontal: 15,
+  },
+  sortOptionActive: { backgroundColor: "#E9EFEA", borderColor: "#AFC0B5" },
+  sortOptionText: { color: "#66726B", flex: 1, fontSize: 13, fontWeight: "700" },
+  sortOptionTextActive: { color: "#365746", fontWeight: "900" },
   listViewport: { alignSelf: "center", flex: 1 },
   list: { alignSelf: "center", paddingBottom: 126 },
   column: { gap: 14 },
@@ -632,7 +1328,48 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 28,
   },
-  renameBackdrop: { alignItems: "center", backgroundColor: "rgba(25,32,28,0.48)", flex: 1, justifyContent: "center", padding: 26 },
+  coverImage: { borderRadius: 9 },
+  coverImageShade: { backgroundColor: "rgba(17, 24, 20, 0.38)", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  coverEditorCard: {
+    backgroundColor: "#FAF8F2",
+    borderColor: "#FFFFFFB8",
+    borderRadius: 28,
+    borderWidth: 1,
+    elevation: 16,
+    maxWidth: 460,
+    padding: 22,
+    width: "100%",
+  },
+  coverEditorContent: { padding: 22 },
+  coverEditorHeader: { alignItems: "center", flexDirection: "row", gap: 13 },
+  coverEditorHeading: { flex: 1 },
+  coverEditorPreviewRow: { flexDirection: "row", gap: 18, marginTop: 18 },
+  coverEditorPreview: {
+    backgroundColor: "#D8D2C7",
+    borderColor: "#C8C2B7",
+    borderRadius: 13,
+    borderWidth: 1,
+    elevation: 4,
+    height: 158,
+    overflow: "hidden",
+    width: 111,
+  },
+  coverEditorPreviewFace: { flex: 1, justifyContent: "flex-end", padding: 13 },
+  coverEditorPreviewTitle: { color: "#F8F0E2", flex: 1, fontFamily: "serif", fontSize: 16, fontWeight: "800", lineHeight: 22, textAlignVertical: "center" },
+  coverEditorPreviewAuthor: { color: "#FFFFFFB5", fontSize: 9 },
+  coverEditorIntro: { flex: 1, justifyContent: "center" },
+  coverEditorLabel: { color: "#37483F", fontSize: 14, fontWeight: "800" },
+  coverEditorCopy: { color: "#858981", fontSize: 11, lineHeight: 17, marginTop: 7 },
+  imageCoverButton: { alignItems: "center", alignSelf: "flex-start", backgroundColor: "#406653", borderRadius: 14, flexDirection: "row", gap: 7, marginTop: 14, minHeight: 42, paddingHorizontal: 15 },
+  imageCoverButtonText: { color: "#F8F4EA", fontSize: 12, fontWeight: "800" },
+  colorSlotRow: { flexDirection: "row", gap: 10, marginTop: 18 },
+  colorSlot: { alignItems: "center", backgroundColor: "#EFECE5", borderColor: "#D9D5CC", borderRadius: 15, borderWidth: 1, flex: 1, flexDirection: "row", minHeight: 52, paddingHorizontal: 10 },
+  colorSlotActive: { backgroundColor: "#E8EFEA", borderColor: "#648272", borderWidth: 1.5 },
+  colorSlotDot: { borderColor: "#FFFFFF", borderRadius: 10, borderWidth: 2, height: 20, width: 20 },
+  colorSlotLabel: { color: "#68716B", fontSize: 10, fontWeight: "700", marginLeft: 7 },
+  colorHexInput: { color: "#33413A", flex: 1, fontSize: 11, fontWeight: "800", marginLeft: 5, paddingHorizontal: 0, textAlign: "right" },
+  colorGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 15 },
+  colorChoice: { borderColor: "#FFFFFF", borderRadius: 13, borderWidth: 2, elevation: 1, height: 30, width: 30 },  renameBackdrop: { alignItems: "center", backgroundColor: "rgba(25,32,28,0.48)", flex: 1, justifyContent: "center", padding: 26 },
   renameCard: { backgroundColor: "#FAF8F2", borderColor: "#FFFFFFB8", borderRadius: 26, borderWidth: 1, elevation: 16, maxWidth: 420, padding: 22, width: "100%" },
   renameIcon: { alignItems: "center", backgroundColor: "#E6EEE8", borderRadius: 16, height: 42, justifyContent: "center", marginBottom: 15, width: 42 },
   renameTitle: { color: "#272D29", fontSize: 21, fontWeight: "800" },

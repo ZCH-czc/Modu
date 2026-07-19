@@ -1,7 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [ValidatePattern('^\d+\.\d+\.\d+$')]
-  [string]$Version = '1.5.4',
+  [string]$Version = '1.5.5',
 
   [int]$VersionCode = 0,
 
@@ -135,6 +135,28 @@ if ($null -eq $javaCommand -and [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
     $env:PATH = "$(Join-Path $env:JAVA_HOME 'bin')$([System.IO.Path]::PathSeparator)$env:PATH"
   }
 }
+
+if ([string]::IsNullOrWhiteSpace($env:ANDROID_HOME)) {
+  $androidSdkCandidates = @(
+    (Join-Path $env:LOCALAPPDATA 'Android\Sdk'),
+    (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Android\android-sdk'),
+    (Join-Path $env:ProgramFiles 'Android\Sdk'),
+    'C:\Android\android-sdk',
+    'D:\Android\Sdk'
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+
+  $androidSdkCandidates = @($androidSdkCandidates)
+  if ($androidSdkCandidates.Count -eq 0) {
+    throw 'Android SDK was not found. Install it with Android Studio or Visual Studio, or set ANDROID_HOME.'
+  }
+  $env:ANDROID_HOME = $androidSdkCandidates[0]
+}
+
+if ([string]::IsNullOrWhiteSpace($env:ANDROID_SDK_ROOT)) {
+  $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+}
+
+Write-Host "Android SDK: $env:ANDROID_HOME" -ForegroundColor DarkCyan
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
   $OutputDirectory = Join-Path $projectRoot 'dist\android'

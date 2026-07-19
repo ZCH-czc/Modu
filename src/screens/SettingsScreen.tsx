@@ -27,11 +27,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAppAlert } from "../components/AppDialog";
 import { IOSPopupModal } from "../components/IOSPopupModal";
+import { ReadingInsightsModal } from "../components/ReadingInsightsModal";
 import {
   checkForAppUpdate,
   CURRENT_APP_VERSION,
   type AppUpdateResult,
 } from "../services/appUpdate";
+import { summarizeReadingStats } from "../services/readingStats";
+import type { ReadingStats } from "../services/readingStats";
 import type {
   Book,
   PageTurn,
@@ -45,15 +48,22 @@ import { getReaderFontFamily, readerFontOptions } from "../utils/readerFonts";
 
 interface Props {
   preferences: ReaderPreferences;
+  books: Book[];
   importedBooks: Book[];
+  readingGoalMinutes: number;
+  readingStats: ReadingStats;
   sourceCount: number;
   onManageSources: () => void;
   onOpenLanTransfer: () => void;
   onOpenGuide: () => void;
+  onReadingGoalChange: (minutes: number) => void;
   onChange: (patch: Partial<ReaderPreferences>) => void;
   onVolumeKeysChange: (enabled: boolean) => void;
   onDeleteBook: (book: Book) => void;
   onClearCache: () => Promise<string>;
+  onExportBackup: () => Promise<{ canceled: boolean; fileCount?: number }>;
+  onExportAnnotations: () => Promise<{ canceled: boolean }>;
+  onRestoreBackup: () => Promise<{ canceled: boolean; fileCount?: number }>;
   onClearHistory: () => Promise<void>;
 }
 
@@ -69,6 +79,7 @@ export function SettingsScreen(props: Props) {
   const { language, setLanguage } = useI18n();
   const [libraryVisible, setLibraryVisible] = useState(false);
   const [aboutVisible, setAboutVisible] = useState(false);
+  const [insightsVisible, setInsightsVisible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateVisible, setUpdateVisible] = useState(false);
@@ -96,6 +107,78 @@ export function SettingsScreen(props: Props) {
         },
       },
     ]);
+  };
+
+const exportAnnotations = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await props.onExportAnnotations();
+      if (!result.canceled) {
+        Alert.alert("批注已导出", "划线与笔记已经整理成 Markdown 文件。");
+      }
+    } catch (error) {
+      Alert.alert(
+        "导出失败",
+        error instanceof Error ? error.message : "暂时无法导出批注。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportBackup = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await props.onExportBackup();
+      if (!result.canceled) {
+        Alert.alert(
+          "备份已写好",
+          `藏书、设置、进度与书签已收进备份，包含 ${result.fileCount ?? 0} 个本地文件。`,
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        "备份失败",
+        error instanceof Error ? error.message : "暂时无法写出备份文件。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreBackup = () => {
+    if (busy) return;
+    Alert.alert(
+      "恢复墨读备份",
+      "恢复会替换当前书架、设置、阅读进度与书签。现有本地数据仍建议先另存一份备份。",
+      [
+        { text: "取消", style: "cancel" },
+        {
+          text: "选择备份",
+          onPress: async () => {
+            setBusy(true);
+            try {
+              const result = await props.onRestoreBackup();
+              if (!result.canceled) {
+                Alert.alert(
+                  "已恢复",
+                  `书架已经回到备份时的模样，并恢复了 ${result.fileCount ?? 0} 个本地文件。`,
+                );
+              }
+            } catch (error) {
+              Alert.alert(
+                "恢复失败",
+                error instanceof Error ? error.message : "无法读懂这个备份文件。",
+              );
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const checkUpdate = async () => {
@@ -299,6 +382,14 @@ export function SettingsScreen(props: Props) {
           />
         </Section>
 
+        <Section title={"\u6bcf\u65e5\u4e00\u9875"}>
+          <ReadingGoalRow
+            goalMinutes={props.readingGoalMinutes}
+            onChange={props.onReadingGoalChange}
+            stats={props.readingStats}
+          />
+        </Section>
+
         <Section title="进度与提醒">
           <SwitchRow
             icon="save-outline"
@@ -358,6 +449,30 @@ export function SettingsScreen(props: Props) {
             onPress={() => setLibraryVisible(true)}
           />
           <ActionRow
+            icon="footsteps-outline"
+            title="�Ķ��㼣"
+            value="�鿴"
+            onPress={() => setInsightsVisible(true)}
+          />
+          <ActionRow
+            icon="document-text-outline"
+            title="导出批注"
+            value="Markdown"
+            onPress={() => void exportAnnotations()}
+          />
+          <ActionRow
+            icon="archive-outline"
+            title="备份书库"
+            value={busy ? "处理中…" : "写出文件"}
+            onPress={() => void exportBackup()}
+          />
+          <ActionRow
+            icon="folder-open-outline"
+            title="恢复书库"
+            value="选择备份"
+            onPress={restoreBackup}
+          />
+          <ActionRow
             icon="trash-outline"
             title="清理缓存"
             value={busy ? "处理中" : "立即清理"}
@@ -385,7 +500,7 @@ export function SettingsScreen(props: Props) {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.4"
+            value="v1.5.5"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -403,8 +518,80 @@ export function SettingsScreen(props: Props) {
         result={updateResult}
         visible={updateVisible}
       />
+      <ReadingInsightsModal
+        books={props.books}
+        onClose={() => setInsightsVisible(false)}
+        stats={props.readingStats}
+        visible={insightsVisible}
+      />
       <AboutModal visible={aboutVisible} onClose={() => setAboutVisible(false)} />
     </SafeAreaView>
+  );
+}
+
+function ReadingGoalRow({
+  goalMinutes,
+  onChange,
+  stats,
+}: {
+  goalMinutes: number;
+  onChange: (minutes: number) => void;
+  stats: ReadingStats;
+}) {
+  const { resolvedLanguage, t } = useI18n();
+  const summary = summarizeReadingStats(stats);
+  const todayMinutes = Math.floor(summary.todayMs / 60000);
+  const ratio = Math.max(0, Math.min(1, summary.todayMs / (goalMinutes * 60000)));
+  const achieved = ratio >= 1;
+  const [trackWidth, setTrackWidth] = useState(0);
+  const progress = useSharedValue(ratio);
+
+  useEffect(() => {
+    progress.value = withTiming(ratio, { duration: 420 });
+  }, [progress, ratio]);
+
+  const fillStyle = useAnimatedStyle(() => ({
+    width: trackWidth * progress.value,
+  }));
+  const progressDescription = achieved
+    ? t("\u4eca\u65e5\u7684\u4e66\u9875\u5df2\u7ecf\u5706\u6ee1")
+    : resolvedLanguage === "en"
+      ? "Today " + todayMinutes + " / " + goalMinutes + " min"
+      : "\u4eca\u65e5\u5df2\u8bfb " + todayMinutes + " / " + goalMinutes + " \u5206\u949f";
+
+  return (
+    <View style={[styles.goalRow, styles.last]}>
+      <View style={styles.goalHeading}>
+        <View style={[styles.rowIcon, achieved && styles.goalIconAchieved]}>
+          <Ionicons
+            color={achieved ? "#F6EFE2" : "#527261"}
+            name={achieved ? "checkmark" : "hourglass-outline"}
+            size={19}
+          />
+        </View>
+        <View style={styles.goalCopy}>
+          <Text style={styles.rowTitle}>{t("\u6bcf\u65e5\u9605\u8bfb\u76ee\u6807")}</Text>
+          <Text style={styles.rowDescription}>{progressDescription}</Text>
+        </View>
+        <View style={styles.goalStepper}>
+          <StepButton icon="remove" onPress={() => onChange(goalMinutes - 5)} />
+          <Text style={styles.goalValue}>{goalMinutes}</Text>
+          <StepButton icon="add" onPress={() => onChange(goalMinutes + 5)} />
+        </View>
+      </View>
+      <View
+        onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+        style={styles.goalTrack}
+      >
+        <Animated.View style={[styles.goalFill, achieved && styles.goalFillAchieved, fillStyle]} />
+      </View>
+      <View style={styles.goalFooter}>
+        <Text style={styles.goalFootnote}>
+          {t("\u6bcf\u5929\u7559\u4e00\u6bb5\u65f6\u95f4\uff0c\u4e0e\u5b57\u53e5\u5b89\u9759\u76f8\u5904")}
+        </Text>
+        <Text style={styles.goalPercent}>{Math.round(ratio * 100)}%</Text>
+      </View>
+    </View>
   );
 }
 
@@ -858,7 +1045,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.4</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.5</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>
@@ -953,6 +1140,18 @@ const styles = StyleSheet.create({
   },
   fontSample: { color: "#34463D", fontSize: 16 },
   fontLabel: { color: "#89867F", fontSize: 9, fontWeight: "700", marginTop: 7 },
+  goalRow: { minHeight: 126, paddingVertical: 15 },
+  goalHeading: { alignItems: "center", flexDirection: "row" },
+  goalIconAchieved: { backgroundColor: "#416451" },
+  goalCopy: { flex: 1, marginLeft: 11, minWidth: 0 },
+  goalStepper: { alignItems: "center", backgroundColor: "#EAF0EC", borderRadius: 13, flexDirection: "row", height: 38 },
+  goalValue: { color: "#334B3F", fontSize: 11, fontWeight: "900", minWidth: 28, textAlign: "center" },
+  goalTrack: { backgroundColor: "#DFE4DF", borderRadius: 5, height: 7, marginTop: 14, overflow: "hidden" },
+  goalFill: { backgroundColor: "#789486", borderRadius: 5, height: 7 },
+  goalFillAchieved: { backgroundColor: "#416451" },
+  goalFooter: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
+  goalFootnote: { color: "#9B968E", flex: 1, fontSize: 8.5 },
+  goalPercent: { color: "#577064", fontSize: 9, fontWeight: "900", marginLeft: 8 },
   fontLabelActive: { color: "#486756" },
   fontCheck: { position: "absolute", right: 5, top: 5 },
   divider: { backgroundColor: "#DED9D0", height: 1 },

@@ -17,13 +17,19 @@ import {
   Easing,
   FlatList,
   InteractionManager,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Text as NativeText,
+  type GestureResponderEvent,
+  type NativeSyntheticEvent,
+  type TextLayoutEventData,
   useWindowDimensions,
   View,
 } from "react-native";
-import { Text } from "../i18n";
+import { Text, TextInput, useI18n } from "../i18n";
 import {
   PanGestureHandler,
   State,
@@ -32,14 +38,31 @@ import {
 } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import type { Book, ReaderPreferences, ReaderTheme } from "../types";
+import type {
+  AnnotationColor,
+  Book,
+  ReaderAnnotation,
+  ReaderBookmark,
+  ReaderPreferences,
+  ReaderTheme,
+} from "../types";
 import { getReaderFontFamily } from "../utils/readerFonts";
+import { IOSPopupModal } from "../components/IOSPopupModal";
+import {
+  createMeasuredReaderPaginationLayout,
+  type ReaderPaginationLayout,
+} from "../services/readerPagination";
 
 type ReaderScreenProps = {
   book: Book;
+  annotations: ReaderAnnotation[];
+  bookmarks: ReaderBookmark[];
   preferences: ReaderPreferences;
   initialPage: number;
   onBack: () => void;
+  onDeleteAnnotation: (annotationId: string) => void;
+  onSaveAnnotation: (annotation: ReaderAnnotation) => void;
+  onToggleBookmark: (pageIndex: number, chapterTitle: string, excerpt: string) => void;
   onPageChange: (pageIndex: number) => void;
   onChapterBoundary?: (direction: -1 | 1) => void;
   onChapterSelect?: (chapterIndex: number) => void;
@@ -48,6 +71,7 @@ type ReaderScreenProps = {
   onDownloadAll?: () => void;
   onOpenOriginal?: (url?: string) => void;
   downloadProgress?: { completed: number; total: number };
+  onPaginationMeasured?: (layout: ReaderPaginationLayout) => void;
 };
 
 type ChapterEntry = {
@@ -58,12 +82,71 @@ type ChapterEntry = {
   url?: string;
 };
 
+type ReaderSearchResult = {
+  key: string;
+  pageIndex: number;
+  chapterTitle: string;
+  excerpt: string;
+  matchStart: number;
+  matchLength: number;
+};
+
 type ReaderPageRuntimeState = {
   bookKey: string;
   phase: "ready" | "turning" | "settling";
   currentIndex: number;
   targetIndex?: number;
 };
+
+const annotationColors: Record<AnnotationColor, { fill: string; stroke: string }> = {
+  amber: { fill: "rgba(222, 174, 77, 0.2)", stroke: "#B98936" },
+  green: { fill: "rgba(102, 151, 116, 0.2)", stroke: "#5C8B69" },
+  blue: { fill: "rgba(91, 132, 177, 0.18)", stroke: "#557DA7" },
+  rose: { fill: "rgba(181, 105, 112, 0.18)", stroke: "#A66168" },
+};
+
+const READER_SEARCH_RESULT_LIMIT = 60;
+
+function createReaderSearchResult(
+  page: string,
+  pageIndex: number,
+  chapterTitle: string,
+  query: string,
+): ReaderSearchResult | undefined {
+  const compactPage = page.replace(/\s+/g, " ").trim();
+  const compactTitle = chapterTitle.replace(/\s+/g, " ").trim();
+  const normalizedQuery = query.toLocaleLowerCase();
+  const titleMatch = compactTitle.toLocaleLowerCase().indexOf(normalizedQuery);
+  const pageMatch = compactPage.toLocaleLowerCase().indexOf(normalizedQuery);
+  if (titleMatch < 0 && pageMatch < 0) return undefined;
+
+  if (pageMatch < 0) {
+    return {
+      key: `search-${pageIndex}`,
+      pageIndex,
+      chapterTitle,
+      excerpt: compactPage.slice(0, 92),
+      matchStart: -1,
+      matchLength: 0,
+    };
+  }
+
+  const excerptStart = Math.max(0, pageMatch - 34);
+  const excerptEnd = Math.min(compactPage.length, pageMatch + query.length + 58);
+  const prefix = excerptStart > 0 ? "��" : "";
+  const suffix = excerptEnd < compactPage.length ? "��" : "";
+  return {
+    key: `search-${pageIndex}`,
+    pageIndex,
+    chapterTitle,
+    excerpt: `${prefix}${compactPage.slice(excerptStart, excerptEnd)}${suffix}`,
+    matchStart: prefix.length + pageMatch - excerptStart,
+    matchLength: query.length,
+  };
+}
+
+const READER_CALIBRATION_TEXT =
+  "山川风月落在纸上，故事沿着灯火缓缓展开。天地玄黄宇宙洪荒，晨昏四季往来不息。".repeat(12);
 
 const themes: Record<
   ReaderTheme,
@@ -101,9 +184,14 @@ const themes: Record<
 
 export function ReaderScreen({
   book,
+  annotations,
+  bookmarks,
   preferences,
   initialPage,
   onBack,
+  onDeleteAnnotation,
+  onSaveAnnotation,
+  onToggleBookmark,
   onPageChange,
   onChapterBoundary,
   onChapterSelect,
@@ -112,7 +200,9 @@ export function ReaderScreen({
   onDownloadAll,
   onOpenOriginal,
   downloadProgress,
+  onPaginationMeasured,
 }: ReaderScreenProps) {
+  const { resolvedLanguage } = useI18n();
   const [pageIndex, setPageIndex] = useState(() =>
     Math.max(0, Math.min(initialPage, book.pages.length - 1)),
   );
@@ -120,14 +210,36 @@ export function ReaderScreen({
     !preferences.immersiveMode,
   );
   const [chapterVisible, setChapterVisible] = useState(false);
+  const [chapterSearchQuery, setChapterSearchQuery] = useState("");
+  const [chapterSearchResults, setChapterSearchResults] = useState<ReaderSearchResult[]>([]);
+  const [chapterSearching, setChapterSearching] = useState(false);
+  const [annotationDraft, setAnnotationDraft] = useState<{
+    existing?: ReaderAnnotation;
+    paragraphIndex: number;
+    quote: string;
+    note: string;
+    color: AnnotationColor;
+  }>();
+  const [pageViewportHeight, setPageViewportHeight] = useState(0);
+  const [completedCalibrationKey, setCompletedCalibrationKey] = useState("");
   const chapterSheetProgress = useRef(new Animated.Value(0)).current;
+  const bookmarkScale = useRef(new Animated.Value(1)).current;
   const pageOpacity = useRef(new Animated.Value(1)).current;
   const pageTransition = useRef(new Animated.Value(0)).current;
   const dragTranslate = useRef(new Animated.Value(0)).current;
   const pageAnimatingRef = useRef(false);
   const pendingPageResetRef = useRef<number | undefined>(undefined);
+  const calibrationSentRef = useRef("");
+  const paragraphLayoutsRef = useRef(new Map<number, { y: number; height: number; quote: string }>());
+  const paragraphLayoutPageKeyRef = useRef("");
+  const longPressConsumedRef = useRef(false);
   const pageCacheRef = useRef(new Map<number, string[]>());
-  const pageBookKey = `${book.id}:${book.onlineChapterIndex ?? "local"}:${book.pages.length}`;
+  const pageBookKey = `${book.id}:${book.onlineChapterIndex ?? "local"}:${book.pages.length}:${book.paginationVersion ?? 0}`;
+  const paragraphLayoutPageKey = `${pageBookKey}:${pageIndex}`;
+  if (paragraphLayoutPageKeyRef.current !== paragraphLayoutPageKey) {
+    paragraphLayoutPageKeyRef.current = paragraphLayoutPageKey;
+    paragraphLayoutsRef.current.clear();
+  }
   const pageRuntimeRef = useRef<ReaderPageRuntimeState>({
     bookKey: pageBookKey,
     currentIndex: pageIndex,
@@ -151,6 +263,48 @@ export function ReaderScreen({
   const chromeLeft = (screenWidth - chromeWidth) / 2;
   const chapterSheetWidth = Math.min(screenWidth, 760);
   const chapterSheetLeft = (screenWidth - chapterSheetWidth) / 2;
+  const calibrationKey = [
+    readingColumnWidth,
+    pageViewportHeight,
+    preferences.fontFamily,
+    preferences.fontSize,
+    preferences.lineHeight,
+    preferences.horizontalPadding,
+    preferences.paragraphSpacing,
+  ].join(":");
+  const handleCalibrationTextLayout = useCallback(
+    (event: NativeSyntheticEvent<TextLayoutEventData>) => {
+      if (!onPaginationMeasured || pageViewportHeight <= 0) return;
+      const lines = event.nativeEvent.lines;
+      if (lines.length < 3 || calibrationSentRef.current === calibrationKey) return;
+      const completeLines = lines.slice(0, -1);
+      const measuredHeights = completeLines
+        .map((line) => line.height)
+        .filter((height) => Number.isFinite(height) && height > 0)
+        .sort((left, right) => left - right);
+      const measuredLineHeight = measuredHeights[
+        Math.floor(measuredHeights.length / 2)
+      ] ?? preferences.fontSize * preferences.lineHeight;
+      calibrationSentRef.current = calibrationKey;
+      setCompletedCalibrationKey(calibrationKey);
+      onPaginationMeasured(
+        createMeasuredReaderPaginationLayout(
+          {
+            lineLengths: completeLines.map((line) => line.text.length),
+            lineHeight: measuredLineHeight,
+            viewportHeight: pageViewportHeight,
+          },
+          preferences,
+        ),
+      );
+    },
+    [
+      calibrationKey,
+      onPaginationMeasured,
+      pageViewportHeight,
+      preferences,
+    ],
+  );
 
   const chapterEntries = useMemo<ChapterEntry[]>(() => {
     if (book.onlineChapters?.length) {
@@ -208,6 +362,36 @@ export function ReaderScreen({
   }, [book.onlineChapterIndex, book.onlineChapters, chapterEntries, pageIndex]);
 
   const currentOriginalUrl = chapterEntries[currentChapterListIndex]?.url || book.sourceUrl;
+  const currentBookmark = bookmarks.find((bookmark) => bookmark.pageIndex === pageIndex);
+  const toggleCurrentBookmark = useCallback(() => {
+    const chapterTitle = book.pageTitles?.[pageIndex] || `第 ${pageIndex + 1} 页`;
+    const excerpt = (book.pages[pageIndex] ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 72);
+    bookmarkScale.stopAnimation();
+    Animated.sequence([
+      Animated.timing(bookmarkScale, {
+        toValue: 0.82,
+        duration: 80,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(bookmarkScale, {
+        toValue: 1,
+        duration: 150,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+    onToggleBookmark(pageIndex, chapterTitle, excerpt);
+  }, [
+    book.pageTitles,
+    book.pages,
+    bookmarkScale,
+    onToggleBookmark,
+    pageIndex,
+  ]);
 
   const openChapterList = useCallback(() => {
     chapterSheetProgress.setValue(0);
@@ -229,9 +413,69 @@ export function ReaderScreen({
       easing: Easing.in(Easing.quad),
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) setChapterVisible(false);
+      if (finished) {
+        setChapterVisible(false);
+        setChapterSearchQuery("");
+        setChapterSearchResults([]);
+        setChapterSearching(false);
+      }
     });
   }, [chapterSheetProgress]);
+
+  useEffect(() => {
+    const query = chapterSearchQuery.trim();
+    if (!query) {
+      setChapterSearchResults([]);
+      setChapterSearching(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let pageCursor = 0;
+    let scanTimer: ReturnType<typeof setTimeout> | undefined;
+    const results: ReaderSearchResult[] = [];
+    setChapterSearching(true);
+
+    const scanNextBatch = () => {
+      if (cancelled) return;
+      const batchEnd = Math.min(pageCursor + 80, book.pages.length);
+      while (pageCursor < batchEnd && results.length < READER_SEARCH_RESULT_LIMIT) {
+        const chapterTitle = book.pageTitles?.[pageCursor]
+          || book.onlineChapters?.[book.onlineChapterIndex ?? 0]?.name
+          || (resolvedLanguage === "en" ? `Page ${pageCursor + 1}` : `�� ${pageCursor + 1} ҳ`);
+        const result = createReaderSearchResult(
+          book.pages[pageCursor] ?? "",
+          pageCursor,
+          chapterTitle,
+          query,
+        );
+        if (result) results.push(result);
+        pageCursor += 1;
+      }
+
+      if (pageCursor < book.pages.length && results.length < READER_SEARCH_RESULT_LIMIT) {
+        scanTimer = setTimeout(scanNextBatch, 0);
+        return;
+      }
+      if (!cancelled) {
+        setChapterSearchResults(results);
+        setChapterSearching(false);
+      }
+    };
+
+    scanTimer = setTimeout(scanNextBatch, 140);
+    return () => {
+      cancelled = true;
+      if (scanTimer) clearTimeout(scanTimer);
+    };
+  }, [
+    book.onlineChapterIndex,
+    book.onlineChapters,
+    book.pageTitles,
+    book.pages,
+    chapterSearchQuery,
+    resolvedLanguage,
+  ]);
 
   useEffect(() => {
     if (!chapterVisible) return undefined;
@@ -592,11 +836,79 @@ export function ReaderScreen({
     () => Animated.multiply(pageOpacity, dragOpacity),
     [dragOpacity, pageOpacity],
   );
+const openAnnotationEditor = useCallback((
+    paragraphIndex: number,
+    quote: string,
+    existing?: ReaderAnnotation,
+  ) => {
+    setAnnotationDraft({
+      existing,
+      paragraphIndex,
+      quote,
+      note: existing?.note ?? "",
+      color: existing?.color ?? "amber",
+    });
+  }, []);
+
+const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
+    const touchY = event.nativeEvent.locationY;
+    const match = [...paragraphLayoutsRef.current.entries()].find(([, layout]) =>
+      touchY >= layout.y && touchY <= layout.y + layout.height
+    );
+    if (!match) return;
+    const [paragraphIndex, layout] = match;
+    const existing = annotations.find((annotation) =>
+      annotation.pageIndex === pageIndex &&
+      annotation.paragraphIndex === paragraphIndex &&
+      annotation.quote === layout.quote
+    );
+    longPressConsumedRef.current = true;
+    setTimeout(() => { longPressConsumedRef.current = false; }, 700);
+    openAnnotationEditor(paragraphIndex, layout.quote, existing);
+  }, [annotations, openAnnotationEditor, pageIndex]);
+
+  const runAfterPossibleLongPress = useCallback((action: () => void) => {
+    if (longPressConsumedRef.current) {
+      longPressConsumedRef.current = false;
+      return;
+    }
+    action();
+  }, []);
+
+  const saveAnnotationDraft = useCallback(() => {
+    if (!annotationDraft) return;
+    const now = Date.now();
+    const chapterTitle = book.pageTitles?.[pageIndex] || `第 ${pageIndex + 1} 页`;
+    onSaveAnnotation({
+      id: annotationDraft.existing?.id ??
+        `${book.id}:note:${now}:${Math.random().toString(36).slice(2, 7)}`,
+      bookId: book.id,
+      pageIndex,
+      chapterIndex: book.onlineChapterIndex,
+      paragraphIndex: annotationDraft.paragraphIndex,
+      chapterTitle,
+      quote: annotationDraft.quote,
+      note: annotationDraft.note.trim(),
+      color: annotationDraft.color,
+      createdAt: annotationDraft.existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+    setAnnotationDraft(undefined);
+  }, [annotationDraft, book, onSaveAnnotation, pageIndex]);
+
   const renderParagraphNodes = (items: string[], index: number, selectable = false) =>
     items.map((paragraph, paragraphIndex) => (
       <Text
         key={`${index}-${paragraphIndex}`}
+        onLayout={selectable ? (event) => {
+          paragraphLayoutsRef.current.set(paragraphIndex, {
+            y: event.nativeEvent.layout.y,
+            height: event.nativeEvent.layout.height,
+            quote: paragraph,
+          });
+        } : undefined}
         selectable={selectable}
+        suppressHighlighting
         style={[
           styles.paragraph,
           {
@@ -607,6 +919,18 @@ export function ReaderScreen({
             marginBottom: preferences.paragraphSpacing,
             textAlign: preferences.textAlignment,
           },
+          (() => {
+            const annotation = annotations.find((item) =>
+              item.pageIndex === index &&
+              item.paragraphIndex === paragraphIndex &&
+              item.quote === paragraph
+            );
+            return annotation ? {
+              backgroundColor: annotationColors[annotation.color].fill,
+              textDecorationColor: annotationColors[annotation.color].stroke,
+              textDecorationLine: "underline" as const,
+            } : undefined;
+          })(),
         ]}
       >
         {paragraph}
@@ -668,6 +992,19 @@ export function ReaderScreen({
                 <Ionicons name="globe-outline" size={22} color={palette.text} />
               </Pressable>
             ) : null}
+<Pressable
+              accessibilityLabel={currentBookmark ? "移除本页书签" : "添加本页书签"}
+              onPress={toggleCurrentBookmark}
+              style={styles.iconButton}
+            >
+              <Animated.View style={{ transform: [{ scale: bookmarkScale }] }}>
+                <Ionicons
+                  name={currentBookmark ? "bookmark" : "bookmark-outline"}
+                  size={22}
+                  color={currentBookmark ? palette.accent : palette.text}
+                />
+              </Animated.View>
+            </Pressable>
             <Pressable accessibilityLabel="章节目录" onPress={openChapterList} style={styles.iconButton}>
               <Ionicons name="list-outline" size={23} color={palette.text} />
             </Pressable>
@@ -708,7 +1045,37 @@ export function ReaderScreen({
           onGestureEvent={onGestureEvent}
           onHandlerStateChange={onGestureStateChange}
         >
-          <Animated.View style={styles.page}>
+          <Animated.View
+            onLayout={(event) => {
+              const nextHeight = Math.round(event.nativeEvent.layout.height);
+              setPageViewportHeight((current) => current === nextHeight ? current : nextHeight);
+            }}
+            style={styles.page}
+          >
+            {onPaginationMeasured && completedCalibrationKey !== calibrationKey ? (
+              <NativeText
+                key={calibrationKey}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                onTextLayout={handleCalibrationTextLayout}
+                pointerEvents="none"
+                style={[
+                  styles.calibrationText,
+                  {
+                    fontFamily: getReaderFontFamily(preferences.fontFamily),
+                    fontSize: preferences.fontSize,
+                    letterSpacing: 0.25,
+                    lineHeight: preferences.fontSize * preferences.lineHeight,
+                    width: Math.max(
+                      180,
+                      readingColumnWidth - preferences.horizontalPadding * 2,
+                    ),
+                  },
+                ]}
+              >
+                {READER_CALIBRATION_TEXT}
+              </NativeText>
+            ) : null}
           {pageIndex > 0 && preferences.pageTurn !== "none" ? (
             <Animated.View
               pointerEvents="none"
@@ -771,17 +1138,23 @@ export function ReaderScreen({
             <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
               <Pressable
                 accessibilityLabel="上一页"
-                onPress={() => changePage(-1)}
+                delayLongPress={360}
+                onLongPress={handleParagraphLongPress}
+                onPress={() => runAfterPossibleLongPress(() => changePage(-1))}
                 style={styles.leftTapArea}
               />
               <Pressable
                 accessibilityLabel="显示或隐藏阅读工具栏"
-                onPress={() => setControlsVisible((visible) => !visible)}
+                delayLongPress={360}
+                onLongPress={handleParagraphLongPress}
+                onPress={() => runAfterPossibleLongPress(() => setControlsVisible((visible) => !visible))}
                 style={styles.centerTapArea}
               />
               <Pressable
                 accessibilityLabel="下一页"
-                onPress={() => changePage(1)}
+                delayLongPress={360}
+                onLongPress={handleParagraphLongPress}
+                onPress={() => runAfterPossibleLongPress(() => changePage(1))}
                 style={styles.rightTapArea}
               />
             </View>
@@ -843,7 +1216,9 @@ export function ReaderScreen({
               style={styles.progressBlock}
             >
               <Text style={[styles.progressText, { color: palette.muted }]}>
-                章节 · {pageIndex + 1} / {book.pages.length} · {Math.round(progress)}%
+                {resolvedLanguage === "en"
+                  ? `Page ${pageIndex + 1} / ${book.pages.length} · ${Math.round(progress)}%`
+                  : `章节 · ${pageIndex + 1} / ${book.pages.length} · ${Math.round(progress)}%`}
               </Text>
               <View style={[styles.progressTrack, { backgroundColor: palette.panel }]}>
                 <View
@@ -911,7 +1286,9 @@ export function ReaderScreen({
                 <View>
                   <Text style={[styles.chapterSheetTitle, { color: palette.text }]}>章节</Text>
                   <Text style={[styles.chapterSheetMeta, { color: palette.muted }]}>
-                    共 {chapterEntries.length} 章 · 当前第 {currentChapterListIndex + 1} 章
+                    {resolvedLanguage === "en"
+                      ? `${chapterEntries.length} chapters · Chapter ${currentChapterListIndex + 1}`
+                      : `共 ${chapterEntries.length} 章 · 当前第 ${currentChapterListIndex + 1} 章`}
                   </Text>
                 </View>
                 <Pressable
@@ -922,6 +1299,125 @@ export function ReaderScreen({
                   <Ionicons name="close" size={20} color={palette.text} />
                 </Pressable>
               </View>
+              <View
+                style={[
+                  styles.chapterSearchBox,
+                  {
+                    backgroundColor: palette.panel,
+                    borderColor: chapterSearchQuery ? `${palette.accent}88` : `${palette.muted}28`,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="search-outline"
+                  size={18}
+                  color={chapterSearchQuery ? palette.accent : palette.muted}
+                />
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onChangeText={setChapterSearchQuery}
+                  placeholder={resolvedLanguage === "en" ? "Search in this book" : "�ڱ�����Ѱ��һ�仰"}
+                  placeholderTextColor={`${palette.muted}99`}
+                  returnKeyType="search"
+                  selectionColor={palette.accent}
+                  style={[styles.chapterSearchInput, { color: palette.text }]}
+                  value={chapterSearchQuery}
+                />
+                {chapterSearching ? (
+                  <ActivityIndicator color={palette.accent} size="small" />
+                ) : chapterSearchQuery ? (
+                  <Pressable
+                    accessibilityLabel={resolvedLanguage === "en" ? "Clear search" : "�������"}
+                    hitSlop={10}
+                    onPress={() => setChapterSearchQuery("")}
+                  >
+                    <Ionicons name="close-circle" size={19} color={palette.muted} />
+                  </Pressable>
+                ) : null}
+              </View>
+              {chapterSearchQuery.trim() ? (
+                <View style={styles.readerSearchArea}>
+                  <View style={styles.readerSearchHeader}>
+                    <Text style={[styles.bookmarkSectionTitle, { color: palette.text }]}>
+                      {resolvedLanguage === "en" ? "Found in the pages" : "�־�������Щҳ��"}
+                    </Text>
+                    <Text style={[styles.bookmarkSectionCount, { color: palette.muted }]}>
+                      {chapterSearching
+                        ? (resolvedLanguage === "en" ? "Searching��" : "���ڷ��ҡ�")
+                        : (resolvedLanguage === "en"
+                          ? `${chapterSearchResults.length}${chapterSearchResults.length >= READER_SEARCH_RESULT_LIMIT ? "+" : ""} results`
+                          : `${chapterSearchResults.length}${chapterSearchResults.length >= READER_SEARCH_RESULT_LIMIT ? "+" : ""} ��`)}
+                    </Text>
+                  </View>
+                  {!chapterSearching && chapterSearchResults.length === 0 ? (
+                    <View style={styles.readerSearchEmpty}>
+                      <Ionicons name="leaf-outline" size={25} color={`${palette.muted}88`} />
+                      <Text style={[styles.readerSearchEmptyTitle, { color: palette.text }]}>
+                        {resolvedLanguage === "en" ? "No matching words" : "û��Ѱ����仰"}
+                      </Text>
+                      <Text style={[styles.readerSearchEmptyText, { color: palette.muted }]}>
+                        {resolvedLanguage === "en"
+                          ? "Try a name, a place, or a shorter phrase."
+                          : "��������ص㣬����̵�һ���֡�"}
+                      </Text>
+                    </View>
+                  ) : (
+                    <FlatList
+                      data={chapterSearchResults}
+                      ItemSeparatorComponent={() => (
+                        <View style={[styles.chapterSeparator, { backgroundColor: `${palette.muted}20` }]} />
+                      )}
+                      keyboardShouldPersistTaps="handled"
+                      keyExtractor={(item) => item.key}
+                      renderItem={({ item }) => {
+                        const before = item.matchStart >= 0 ? item.excerpt.slice(0, item.matchStart) : item.excerpt;
+                        const matched = item.matchStart >= 0
+                          ? item.excerpt.slice(item.matchStart, item.matchStart + item.matchLength)
+                          : "";
+                        const after = item.matchStart >= 0
+                          ? item.excerpt.slice(item.matchStart + item.matchLength)
+                          : "";
+                        return (
+                          <Pressable
+                            onPress={() => selectChapter({
+                              key: item.key,
+                              pageIndex: item.pageIndex,
+                              title: item.chapterTitle,
+                            })}
+                            style={({ pressed }) => [
+                              styles.readerSearchResult,
+                              pressed && { backgroundColor: `${palette.accent}12` },
+                            ]}
+                          >
+                            <View style={[styles.readerSearchPageBadge, { backgroundColor: `${palette.accent}16` }]}>
+                              <Text style={[styles.readerSearchPageText, { color: palette.accent }]}>
+                                {item.pageIndex + 1}
+                              </Text>
+                            </View>
+                            <View style={styles.readerSearchResultCopy}>
+                              <Text numberOfLines={1} style={[styles.readerSearchChapter, { color: palette.text }]}>
+                                {item.chapterTitle}
+                              </Text>
+                              <Text numberOfLines={2} style={[styles.readerSearchExcerpt, { color: palette.muted }]}>
+                                {before}
+                                {matched ? (
+                                  <Text style={{ color: palette.accent, fontWeight: "800" }}>{matched}</Text>
+                                ) : null}
+                                {after}
+                              </Text>
+                            </View>
+                            <Ionicons name="arrow-forward" size={16} color={`${palette.muted}88`} />
+                          </Pressable>
+                        );
+                      }}
+                      showsVerticalScrollIndicator={false}
+                      style={styles.readerSearchList}
+                    />
+                  )}
+                </View>
+              ) : null}
+              <View style={[styles.chapterDefaultContent, chapterSearchQuery.trim() && styles.hidden]}>
               {onOpenOriginal ? (
                 <Pressable
                   accessibilityLabel="在原网页查找更多章节"
@@ -940,6 +1436,137 @@ export function ReaderScreen({
                   </View>
                   <Ionicons name="open-outline" size={18} color={palette.muted} />
                 </Pressable>
+              ) : null}
+{bookmarks.length ? (
+                <View style={styles.bookmarkSection}>
+                  <View style={styles.bookmarkSectionHeader}>
+                    <Text style={[styles.bookmarkSectionTitle, { color: palette.text }]}>书签</Text>
+                    <Text style={[styles.bookmarkSectionCount, { color: palette.muted }]}>
+                      {resolvedLanguage === "en"
+                        ? `${bookmarks.length} saved ${bookmarks.length === 1 ? "place" : "places"}`
+                        : `${bookmarks.length} 处留痕`}
+                    </Text>
+                  </View>
+                  <ScrollView
+                    contentContainerStyle={styles.bookmarkRail}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                  >
+                    {[...bookmarks]
+                      .sort((left, right) => left.pageIndex - right.pageIndex)
+                      .map((bookmark) => (
+                        <Pressable
+                          key={bookmark.id}
+                          onPress={() => selectChapter({
+                            key: bookmark.id,
+                            title: bookmark.chapterTitle,
+                            pageIndex: Math.min(
+                              Math.max(bookmark.pageIndex, 0),
+                              Math.max(book.pages.length - 1, 0),
+                            ),
+                          })}
+                          style={[
+                            styles.bookmarkCard,
+                            {
+                              backgroundColor: palette.panel,
+                              borderColor: bookmark.pageIndex === pageIndex
+                                ? palette.accent
+                                : `${palette.muted}25`,
+                            },
+                          ]}
+                        >
+                          <View style={styles.bookmarkCardTop}>
+                            <Ionicons name="bookmark" size={14} color={palette.accent} />
+                            <Text style={[styles.bookmarkPage, { color: palette.accent }]}>
+                              {bookmark.pageIndex + 1}
+                            </Text>
+                          </View>
+                          <Text
+                            numberOfLines={1}
+                            style={[styles.bookmarkChapter, { color: palette.text }]}
+                          >
+                            {bookmark.chapterTitle}
+                          </Text>
+                          <Text
+                            numberOfLines={2}
+                            style={[styles.bookmarkExcerpt, { color: palette.muted }]}
+                          >
+                            {bookmark.excerpt || "这一页，曾被你轻轻折起。"}
+                          </Text>
+                        </Pressable>
+                      ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+{annotations.length ? (
+                <View style={styles.annotationSection}>
+                  <View style={styles.bookmarkSectionHeader}>
+                    <Text style={[styles.bookmarkSectionTitle, { color: palette.text }]}>批注</Text>
+                    <Text style={[styles.bookmarkSectionCount, { color: palette.muted }]}>
+                      {resolvedLanguage === "en"
+                        ? `${annotations.length} ${annotations.length === 1 ? "note" : "notes"}`
+                        : `${annotations.length} 条笔记`}
+                    </Text>
+                  </View>
+                  <ScrollView
+                    contentContainerStyle={styles.bookmarkRail}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                  >
+                    {[...annotations]
+                      .sort((left, right) => left.pageIndex - right.pageIndex)
+                      .map((annotation) => (
+                        <Pressable
+                          key={annotation.id}
+                          onLongPress={() => {
+                            closeChapterList();
+                            setTimeout(() => openAnnotationEditor(
+                              annotation.paragraphIndex,
+                              annotation.quote,
+                              annotation,
+                            ), 190);
+                          }}
+                          onPress={() => selectChapter({
+                            key: annotation.id,
+                            title: annotation.chapterTitle,
+                            pageIndex: Math.min(
+                              Math.max(annotation.pageIndex, 0),
+                              Math.max(book.pages.length - 1, 0),
+                            ),
+                          })}
+                          style={[
+                            styles.annotationCard,
+                            {
+                              backgroundColor: palette.panel,
+                              borderColor: annotationColors[annotation.color].stroke,
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.annotationStripe,
+                              { backgroundColor: annotationColors[annotation.color].stroke },
+                            ]}
+                          />
+                          <Text
+                            numberOfLines={2}
+                            style={[styles.annotationQuote, { color: palette.text }]}
+                          >
+                            {annotation.quote}
+                          </Text>
+                          <Text
+                            numberOfLines={1}
+                            style={[styles.annotationNote, { color: palette.muted }]}
+                          >
+                            {annotation.note || (resolvedLanguage === "en" ? "Highlight only" : "只留下一道划线")}
+                          </Text>
+                          <Text style={[styles.annotationHint, { color: palette.muted }]}>
+                            {resolvedLanguage === "en" ? "Hold to edit" : "长按编辑"}
+                          </Text>
+                        </Pressable>
+                      ))}
+                  </ScrollView>
+                </View>
               ) : null}
               <FlatList
                 data={chapterEntries}
@@ -983,9 +1610,105 @@ export function ReaderScreen({
                 showsVerticalScrollIndicator={false}
                 style={styles.chapterList}
               />
+              </View>
             </Animated.View>
           </View>
         ) : null}
+
+        <IOSPopupModal
+          onRequestClose={() => setAnnotationDraft(undefined)}
+          visible={Boolean(annotationDraft)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={styles.annotationModalKeyboard}
+          >
+            <View style={[styles.annotationModal, { backgroundColor: palette.background }]}>
+              <View style={styles.annotationModalHeader}>
+                <View style={styles.annotationModalHeading}>
+                  <Text style={[styles.annotationModalTitle, { color: palette.text }]}>留一句批注</Text>
+                  <Text style={[styles.annotationModalSubtitle, { color: palette.muted }]}>长按段落留下划线，也可以写下此刻所想</Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="关闭批注"
+                  onPress={() => setAnnotationDraft(undefined)}
+                  style={[styles.chapterCloseButton, { backgroundColor: palette.panel }]}
+                >
+                  <Ionicons name="close" size={20} color={palette.text} />
+                </Pressable>
+              </View>
+              <Text
+                numberOfLines={4}
+                style={[
+                  styles.annotationModalQuote,
+                  {
+                    backgroundColor: annotationDraft
+                      ? annotationColors[annotationDraft.color].fill
+                      : palette.panel,
+                    color: palette.text,
+                  },
+                ]}
+              >
+                {annotationDraft?.quote}
+              </Text>
+              <View style={styles.annotationColorRow}>
+                {(Object.keys(annotationColors) as AnnotationColor[]).map((color) => (
+                  <Pressable
+                    accessibilityLabel={`批注颜色 ${color}`}
+                    key={color}
+                    onPress={() => setAnnotationDraft((draft) => draft ? { ...draft, color } : draft)}
+                    style={[
+                      styles.annotationColorButton,
+                      { backgroundColor: annotationColors[color].fill },
+                      annotationDraft?.color === color && {
+                        borderColor: annotationColors[color].stroke,
+                        borderWidth: 2,
+                      },
+                    ]}
+                  >
+                    {annotationDraft?.color === color ? (
+                      <Ionicons name="checkmark" size={17} color={annotationColors[color].stroke} />
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                multiline
+                onChangeText={(note) => setAnnotationDraft((draft) =>
+                  draft ? { ...draft, note } : draft
+                )}
+                placeholder="写下这一页带来的念头…"
+                placeholderTextColor={palette.muted}
+                selectionColor={palette.accent}
+                style={[
+                  styles.annotationInput,
+                  { backgroundColor: palette.panel, color: palette.text },
+                ]}
+                value={annotationDraft?.note ?? ""}
+              />
+              <View style={styles.annotationModalActions}>
+                {annotationDraft?.existing ? (
+                  <Pressable
+                    onPress={() => {
+                      onDeleteAnnotation(annotationDraft.existing!.id);
+                      setAnnotationDraft(undefined);
+                    }}
+                    style={styles.annotationDeleteButton}
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#A85F5F" />
+                    <Text style={styles.annotationDeleteText}>删除</Text>
+                  </Pressable>
+                ) : <View />}
+                <Pressable
+                  onPress={saveAnnotationDraft}
+                  style={[styles.annotationSaveButton, { backgroundColor: palette.accent }]}
+                >
+                  <Text style={styles.annotationSaveText}>收好这句</Text>
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </IOSPopupModal>
       </View>
     </SafeAreaView>
   );
@@ -1032,6 +1755,7 @@ const styles = StyleSheet.create({
   adjacentPage: { bottom: 0, position: "absolute", top: 0 },
   pageContent: { minHeight: "100%", paddingBottom: 104, paddingTop: 12 },
   paragraph: { fontFamily: "serif", letterSpacing: 0.25 },
+  calibrationText: { left: 0, opacity: 0, position: "absolute", top: 0 },
   leftTapArea: {
     bottom: 0,
     left: 0,
@@ -1131,6 +1855,74 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 36,
   },
+  chapterSearchBox: {
+    alignItems: "center",
+    borderRadius: 17,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 9,
+    marginBottom: 12,
+    marginHorizontal: 18,
+    minHeight: 48,
+    paddingHorizontal: 13,
+  },
+  chapterSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    minHeight: 46,
+    paddingVertical: 0,
+  },
+  chapterDefaultContent: { flexShrink: 1 },
+  hidden: { display: "none" },
+  readerSearchArea: { flexShrink: 1, minHeight: 180 },
+  readerSearchHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingBottom: 8,
+    paddingHorizontal: 20,
+  },
+  readerSearchList: { flexGrow: 0, flexShrink: 1 },
+  readerSearchResult: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 11,
+    minHeight: 76,
+    paddingHorizontal: 19,
+    paddingVertical: 10,
+  },
+  readerSearchPageBadge: {
+    alignItems: "center",
+    borderRadius: 13,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  readerSearchPageText: {
+    fontSize: 11,
+    fontVariant: ["tabular-nums"],
+    fontWeight: "800",
+  },
+  readerSearchResultCopy: { flex: 1 },
+  readerSearchChapter: { fontSize: 13, fontWeight: "700" },
+  readerSearchExcerpt: { fontSize: 11, lineHeight: 17, marginTop: 4 },
+  readerSearchEmpty: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 190,
+    paddingHorizontal: 28,
+  },
+  readerSearchEmptyTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 10,
+  },
+  readerSearchEmptyText: {
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 5,
+    textAlign: "center",
+  },
   webChapterAction: {
     alignItems: "center",
     borderRadius: 18,
@@ -1151,6 +1943,113 @@ const styles = StyleSheet.create({
   webChapterActionCopy: { flex: 1 },
   webChapterActionTitle: { fontSize: 13, fontWeight: "700" },
   webChapterActionText: { fontSize: 10.5, marginTop: 4 },
+  bookmarkSection: { marginBottom: 10 },
+  bookmarkSectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+  },
+  bookmarkSectionTitle: { fontSize: 13, fontWeight: "800" },
+  bookmarkSectionCount: { fontSize: 10.5 },
+  bookmarkRail: { gap: 10, paddingHorizontal: 18, paddingTop: 9 },
+  bookmarkCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    minHeight: 92,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    width: 188,
+  },
+  bookmarkCardTop: { alignItems: "center", flexDirection: "row", gap: 5 },
+  bookmarkPage: { fontSize: 10, fontVariant: ["tabular-nums"], fontWeight: "800" },
+  bookmarkChapter: { fontSize: 12.5, fontWeight: "700", marginTop: 7 },
+  bookmarkExcerpt: { fontSize: 10.5, lineHeight: 15, marginTop: 4 },
+  annotationSection: { marginBottom: 10 },
+  annotationCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    minHeight: 108,
+    overflow: "hidden",
+    paddingBottom: 10,
+    paddingHorizontal: 13,
+    paddingTop: 13,
+    width: 208,
+  },
+  annotationStripe: { borderRadius: 2, height: 3, marginBottom: 9, width: 34 },
+  annotationQuote: { fontSize: 11.5, fontWeight: "600", lineHeight: 17 },
+  annotationNote: { fontSize: 10.5, marginTop: 7 },
+  annotationHint: { fontSize: 9, marginTop: 7 },
+  annotationModalKeyboard: { alignItems: "center", width: "100%" },
+  annotationModal: {
+    borderRadius: 28,
+    elevation: 24,
+    maxWidth: 520,
+    padding: 20,
+    shadowColor: "#142018",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.26,
+    shadowRadius: 24,
+    width: "100%",
+  },
+  annotationModalHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  annotationModalHeading: { flex: 1, marginRight: 12 },
+  annotationModalTitle: { fontSize: 20, fontWeight: "800" },
+  annotationModalSubtitle: { fontSize: 11, lineHeight: 16, marginTop: 4 },
+  annotationModalQuote: {
+    borderRadius: 16,
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 16,
+    overflow: "hidden",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  annotationColorRow: { flexDirection: "row", gap: 10, marginTop: 14 },
+  annotationColorButton: {
+    alignItems: "center",
+    borderColor: "transparent",
+    borderRadius: 16,
+    height: 36,
+    justifyContent: "center",
+    width: 48,
+  },
+  annotationInput: {
+    borderRadius: 17,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 14,
+    minHeight: 112,
+    paddingHorizontal: 14,
+    paddingTop: 13,
+    textAlignVertical: "top",
+  },
+  annotationModalActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  annotationDeleteButton: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 10,
+  },
+  annotationDeleteText: { color: "#A85F5F", fontSize: 13, fontWeight: "700" },
+  annotationSaveButton: {
+    alignItems: "center",
+    borderRadius: 16,
+    minHeight: 46,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  annotationSaveText: { color: "#F8F4EA", fontSize: 13, fontWeight: "800" },
   chapterList: { flexGrow: 0, flexShrink: 1 },
   chapterItem: {
     alignItems: "center",

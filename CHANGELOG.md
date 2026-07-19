@@ -6,6 +6,33 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-07-19
+
+### Added
+- Added local-first reading traces with foreground-only session timing, page-turn counts, streaks, a seven-day chart, and per-book totals.
+- Added a persistent adjustable daily reading goal with live progress and an animated completion state.
+- Added an animated daily reading progress card to the bookshelf with direct access to reading traces, using local calendar dates across midnight.
+
+
+- Added persistent library search, local and web filters, recently-read/title/progress sorting, animated controls, and a focused empty state.
+
+- Added responsive in-book full-text search with batched scanning, contextual excerpts, highlighted matches, and direct page navigation.
+
+- Added paragraph highlights and reading notes with four colors, animated editing, chapter-sheet navigation, pagination-safe quote relocation, and Markdown export.
+
+- Added persistent page bookmarks with animated reader controls and bookmark navigation inside the chapter sheet.
+- Added Android library backup and restore for settings, books, reading progress, bookmarks, and referenced local files.
+
+- Added persistent bookshelf cover customization with two-color gradients, custom HEX colors, and local image covers.
+- Added animated, stage-aware import progress for EPUB, TXT, and PDF files, including per-chapter EPUB parsing and layout progress.
+
+### Fixed
+
+- Measure the active Android font and safe reading viewport at runtime, then repaginate local text books without losing the reader's relative position.
+
+- Repaginate imported EPUB and TXT books using the current viewport, font, line height, and paragraph spacing.
+- Account for short paragraph-heavy pages such as EPUB tables of contents so their last rows stay above Android system navigation.
+
 ## [1.5.4] - 2026-07-19
 
 ### Fixed

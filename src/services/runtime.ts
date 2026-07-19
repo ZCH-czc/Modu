@@ -9,10 +9,15 @@ import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
 
 import { translate } from "../i18n";
+import {
+  paginateTextForReader,
+  type ReaderPaginationLayout,
+} from "./readerPagination";
 import type {
   Book,
   ReaderOrientation,
   ReaderPreferences,
+  ReaderBookmark,
   ReadingProgress,
 } from "../types";
 
@@ -20,10 +25,26 @@ const PREFERENCES_KEY = "modu.preferences.v3";
 const BOOKS_KEY = "modu.imported-books.v3";
 const HIDDEN_SAMPLES_KEY = "modu.hidden-sample-books.v1";
 const PROGRESS_KEY = "modu.reading-progress.v3";
+const BOOKMARKS_KEY = "modu.reader-bookmarks.v1";
 const REMINDER_CHANNEL = "reading-reminder";
 const REMINDER_ID_KEY = "modu.reading-reminder-id.v1";
 const ONBOARDING_KEY = "modu.onboarding-complete.v1";
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
+
+export type ImportProgress = {
+  progress: number;
+  message: string;
+};
+
+type ImportProgressCallback = (progress: ImportProgress) => void;
+
+function reportImportProgress(
+  callback: ImportProgressCallback | undefined,
+  progress: number,
+  message: string,
+) {
+  callback?.({ progress: Math.max(0, Math.min(progress, 1)), message });
+}
 
 export const defaultPreferences: ReaderPreferences = {
   theme: "paper",
@@ -173,6 +194,30 @@ export async function saveProgress(
   await AsyncStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
 }
 
+export async function loadBookmarks(): Promise<ReaderBookmark[]> {
+  const stored = await AsyncStorage.getItem(BOOKMARKS_KEY);
+  if (!stored) return [];
+  try {
+    const bookmarks = JSON.parse(stored) as unknown;
+    if (!Array.isArray(bookmarks)) return [];
+    return bookmarks.filter((bookmark): bookmark is ReaderBookmark =>
+      Boolean(
+        bookmark &&
+        typeof bookmark === "object" &&
+        typeof (bookmark as ReaderBookmark).id === "string" &&
+        typeof (bookmark as ReaderBookmark).bookId === "string" &&
+        Number.isInteger((bookmark as ReaderBookmark).pageIndex),
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function saveBookmarks(bookmarks: ReaderBookmark[]) {
+  await AsyncStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+}
+
 export async function clearProgress() {
   await AsyncStorage.removeItem(PROGRESS_KEY);
 }
@@ -193,9 +238,11 @@ export async function saveHiddenSampleBooks(ids: string[]) {
 }
 
 function storageBooks(books: Book[]) {
-  return books.map((book) =>
-    book.format === "epub" ? { ...book, pages: [], pageTitles: [] } : book,
-  );
+  return books.map((book) => {
+    if (book.format !== "epub") return book;
+    const { localChapters: _localChapters, ...stored } = book;
+    return { ...stored, pages: [], pageTitles: [] };
+  });
 }
 
 async function persistBooks(books: Book[]) {
@@ -227,8 +274,23 @@ export async function hydrateBook(book: Book): Promise<Book> {
     const parsed = JSON.parse(content) as {
       pages: string[];
       pageTitles: string[];
+      chapters?: Array<{ title: string; text: string }>;
     };
-    return { ...book, pages: parsed.pages, pageTitles: parsed.pageTitles };
+    const localChapters = parsed.chapters?.length
+      ? parsed.chapters
+      : reconstructTitledChapters(parsed.pages, parsed.pageTitles);
+    if (!parsed.chapters?.length) {
+      void FileSystem.writeAsStringAsync(
+        book.contentUri,
+        JSON.stringify({ ...parsed, chapters: localChapters }),
+      );
+    }
+    return {
+      ...book,
+      pages: parsed.pages,
+      pageTitles: parsed.pageTitles,
+      localChapters,
+    };
   } catch {
     return {
       ...book,
@@ -238,7 +300,41 @@ export async function hydrateBook(book: Book): Promise<Book> {
   }
 }
 
-export async function importDocument(existingBooks: Book[]): Promise<Book | null> {
+export function repaginateImportedTextBook(
+  book: Book,
+  layout: ReaderPaginationLayout,
+): Book {
+  if (book.format !== "epub" && book.format !== "txt") return book;
+  const chapters = book.localChapters?.length
+    ? book.localChapters
+    : reconstructTitledChapters(book.pages, book.pageTitles);
+  const pages: string[] = [];
+  const pageTitles: string[] = [];
+  chapters.forEach((chapter) => {
+    const chapterPages = paginateTextForReader(chapter.text, layout);
+    pages.push(...chapterPages);
+    pageTitles.push(...chapterPages.map(() => chapter.title));
+  });
+  return book.format === "epub"
+    ? { ...book, pages, pageTitles, localChapters: chapters }
+    : { ...book, pages, pageTitles };
+}
+
+export async function persistEpubPagination(book: Book) {
+  if (book.format !== "epub" || !book.contentUri) return;
+  await FileSystem.writeAsStringAsync(
+    book.contentUri,
+    JSON.stringify({
+      pages: book.pages,
+      pageTitles: book.pageTitles ?? [],
+      chapters: book.localChapters ?? reconstructTitledChapters(book.pages, book.pageTitles),
+    }),
+  );
+}
+export async function importDocument(
+  existingBooks: Book[],
+  onProgress?: ImportProgressCallback,
+): Promise<Book | null> {
   const result = await DocumentPicker.getDocumentAsync({
     type: ["application/epub+zip", "application/pdf", "text/plain"],
     copyToCacheDirectory: true,
@@ -246,7 +342,8 @@ export async function importDocument(existingBooks: Book[]): Promise<Book | null
   if (result.canceled) return null;
 
   const asset = result.assets[0];
-  return importBookFromUri(asset.uri, asset.name, asset.size, existingBooks);
+  reportImportProgress(onProgress, 0.08, "正在读取文件信息");
+  return importBookFromUri(asset.uri, asset.name, asset.size, existingBooks, onProgress);
 }
 
 export async function importBookFromUri(
@@ -254,11 +351,13 @@ export async function importBookFromUri(
   sourceName: string,
   sourceSize: number | undefined,
   existingBooks: Book[],
+  onProgress?: ImportProgressCallback,
 ): Promise<Book> {
   if (sourceSize && sourceSize > MAX_FILE_SIZE) {
     throw new Error("文件超过 25 MB，请选择更小的 EPUB、TXT 或 PDF。");
   }
 
+  reportImportProgress(onProgress, 0.1, "正在检查文件格式");
   const normalizedName = sourceName.trim() || `received-${Date.now()}.txt`;
   const extension = normalizedName.toLowerCase().match(/\.(epub|pdf|txt)$/)?.[1] as
     | "epub"
@@ -272,10 +371,13 @@ export async function importBookFromUri(
   await FileSystem.makeDirectoryAsync(libraryDirectory, { intermediates: true });
   const fileUri = `${libraryDirectory}${id}.${extension}`;
   const copySource = sourceUri.includes("://") ? sourceUri : `file://${sourceUri}`;
+  reportImportProgress(onProgress, 0.14, "正在把书收进本机");
   await FileSystem.copyAsync({ from: copySource, to: fileUri });
+  reportImportProgress(onProgress, 0.24, "文件已经安放妥当");
 
   let book: Book;
   if (extension === "pdf") {
+    reportImportProgress(onProgress, 0.42, "正在校验 PDF");
     const header = await FileSystem.readAsStringAsync(fileUri, {
       encoding: FileSystem.EncodingType.Base64,
       length: 8,
@@ -285,6 +387,7 @@ export async function importBookFromUri(
       await FileSystem.deleteAsync(fileUri, { idempotent: true });
       throw new Error("这个文件不是有效的 PDF。");
     }
+    reportImportProgress(onProgress, 0.9, "PDF 已准备好");
     book = {
       id,
       title: normalizedName.replace(/\.pdf$/i, ""),
@@ -302,12 +405,15 @@ export async function importBookFromUri(
       sourceSize,
     };
   } else if (extension === "txt") {
+    reportImportProgress(onProgress, 0.38, "正在读取文本");
     const content = (await FileSystem.readAsStringAsync(fileUri)).replace(/^\uFEFF/, "").trim();
     if (content.length < 20) {
       await FileSystem.deleteAsync(fileUri, { idempotent: true });
       throw new Error("这个 TXT 文件没有足够的正文内容。");
     }
+    reportImportProgress(onProgress, 0.68, "正在整理文字与分页");
     const pages = paginate(content, 720);
+    reportImportProgress(onProgress, 0.9, "文本已经排好");
     book = {
       id,
       title: normalizedName.replace(/\.txt$/i, ""),
@@ -325,11 +431,13 @@ export async function importBookFromUri(
       sourceSize,
     };
   } else {
-    book = await parseEpub(id, fileUri, normalizedName);
+    book = await parseEpub(id, fileUri, normalizedName, onProgress);
     book.sourceSize = sourceSize;
   }
 
+  reportImportProgress(onProgress, 0.97, "正在写入书架");
   await persistBooks([...existingBooks, book]);
+  reportImportProgress(onProgress, 1, "导入完成");
   return book;
 }
 export async function deleteImportedBook(book: Book, books: Book[]) {
@@ -361,11 +469,14 @@ async function parseEpub(
   id: string,
   fileUri: string,
   fallbackName: string,
+  onProgress?: ImportProgressCallback,
 ): Promise<Book> {
+  reportImportProgress(onProgress, 0.28, "正在读取 EPUB");
   const base64 = await FileSystem.readAsStringAsync(fileUri, {
     encoding: FileSystem.EncodingType.Base64,
   });
   const zip = await JSZip.loadAsync(base64, { base64: true });
+  reportImportProgress(onProgress, 0.36, "正在解开书页");
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
@@ -399,7 +510,13 @@ async function parseEpub(
     : "";
 
   const chapters: { title: string; text: string }[] = [];
-  for (const item of spineItems) {
+  for (let spineIndex = 0; spineIndex < spineItems.length; spineIndex += 1) {
+    const item = spineItems[spineIndex];
+    reportImportProgress(
+      onProgress,
+      0.42 + ((spineIndex + 1) / Math.max(spineItems.length, 1)) * 0.38,
+      `正在解析章节 ${spineIndex + 1} / ${spineItems.length}`,
+    );
     const href = manifest.get(item["@_idref"]);
     if (!href) continue;
     const path = normalizeZipPath(`${opfDirectory}${decodeURIComponent(href)}`);
@@ -419,17 +536,27 @@ async function parseEpub(
 
   const pages: string[] = [];
   const pageTitles: string[] = [];
-  chapters.forEach((chapter) => {
+  for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex += 1) {
+    const chapter = chapters[chapterIndex];
+    reportImportProgress(
+      onProgress,
+      0.82 + ((chapterIndex + 1) / chapters.length) * 0.1,
+      `正在排版章节 ${chapterIndex + 1} / ${chapters.length}`,
+    );
     paginate(chapter.text, 720).forEach((page) => {
       pages.push(page);
       pageTitles.push(chapter.title);
     });
-  });
+    if ((chapterIndex + 1) % 8 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
+  reportImportProgress(onProgress, 0.94, "正在保存章节缓存");
   const contentUri = `${FileSystem.documentDirectory}library/${id}.content.json`;
   await FileSystem.writeAsStringAsync(
     contentUri,
-    JSON.stringify({ pages, pageTitles }),
+    JSON.stringify({ pages, pageTitles, chapters }),
   );
 
   return {
@@ -445,6 +572,7 @@ async function parseEpub(
     pages,
     pageTitles,
     format: "epub" as const,
+    localChapters: chapters,
     fileUri,
     contentUri,
   };
@@ -499,6 +627,36 @@ function paginate(text: string, target: number) {
   return pages;
 }
 
+function reconstructTitledChapters(
+  pages: string[],
+  pageTitles?: string[],
+): Array<{ title: string; text: string }> {
+  const chapters: Array<{ title: string; text: string }> = [];
+  let title = pageTitles?.[0]?.trim() || "正文";
+  let chapterPages: string[] = [];
+  const flush = () => {
+    if (!chapterPages.length) return;
+    chapters.push({ title, text: joinReconstructedPages(chapterPages) });
+    chapterPages = [];
+  };
+  pages.forEach((page, index) => {
+    const nextTitle = pageTitles?.[index]?.trim() || title;
+    if (chapterPages.length && nextTitle !== title) {
+      flush();
+      title = nextTitle;
+    }
+    chapterPages.push(page);
+  });
+  flush();
+  return chapters;
+}
+function joinReconstructedPages(pages: string[]) {
+  return pages.reduce((text, page) => {
+    if (!text) return page;
+    const separator = /[。！？.!?…」』”’]$/.test(text.trim()) ? "\n\n" : "";
+    return text + separator + page;
+  }, "");
+}
 function normalizeZipPath(path: string) {
   const parts: string[] = [];
   path.split("/").forEach((part) => {
