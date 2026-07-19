@@ -2,7 +2,7 @@
   "expo": {
     "name": "\u58A8\u8BFB",
     "slug": "modu-reader-v3",
-    "version": "1.5.3",
+    "version": "1.5.4",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -31,7 +31,7 @@
       "supportsTablet": true
     },
     "android": {
-      "versionCode": 7,
+      "versionCode": 8,
       "predictiveBackGestureEnabled": true,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {

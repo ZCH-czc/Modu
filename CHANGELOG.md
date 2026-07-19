@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-07-19
+
+### Fixed
+
+- Rebalanced reader page spacing with a tighter top edge and a safer bottom reading margin.
+- Web-captured books now repaginate for the current screen, font size, and line spacing so the last lines remain visible.
+- Pre-layout adjacent reader pages and commit page text before resetting the native page-turn transform, eliminating the visible text refresh after an animation.
+
 ## [1.5.3] - 2026-07-18
 
 ### Added
@@ -59,7 +67,8 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 - Added built-in web discovery with reader mode, horizontal pagination, and optional vertical scrolling.
 - Added animated reader settings, onboarding, predictive Android back gestures, and initial performance optimizations.
 
-[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.4
 [1.5.3]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.3
 [1.5.2]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.2
 [1.5.1]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.1

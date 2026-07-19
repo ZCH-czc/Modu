@@ -75,7 +75,11 @@ import {
   savePreferences,
   saveProgress,
 } from "./src/services/runtime";
-import { createWebCaptureBook } from "./src/services/webCapture";
+import {
+  createWebCaptureBook,
+  estimateWebCapturePageTarget,
+  repaginateWebCaptureBook,
+} from "./src/services/webCapture";
 import type {
   AppTab,
   Book,
@@ -160,7 +164,7 @@ function AppContent() {
     generation: number;
     phase: "idle" | "loading" | "ready" | "partial";
   }>({ generation: 0, phase: "idle" });
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const navWidth = Math.min(screenWidth - 24, 560);
   const tabProgress = useSharedValue(0);
 
@@ -381,8 +385,45 @@ function AppContent() {
   };
 
   const presentBook = (book: Book) => {
+    let preparedBook = book;
+    if (book.format === "webclip" && book.webChapters?.length) {
+      const pageTarget = estimateWebCapturePageTarget(
+        screenWidth,
+        screenHeight,
+        preferencesRef.current,
+      );
+      preparedBook = repaginateWebCaptureBook(book, pageTarget);
+
+      const paginationChanged =
+        preparedBook.pages.length !== book.pages.length ||
+        preparedBook.pages[0] !== book.pages[0];
+      if (paginationChanged) {
+        const oldPage = pendingProgress.current[book.id]?.pageIndex ?? 0;
+        const oldLastPage = Math.max(book.pages.length - 1, 1);
+        const newLastPage = Math.max(preparedBook.pages.length - 1, 0);
+        const migratedPage = Math.min(
+          newLastPage,
+          Math.round((oldPage / oldLastPage) * newLastPage),
+        );
+        const nextProgress = {
+          ...pendingProgress.current,
+          [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
+        };
+        pendingProgress.current = nextProgress;
+        setProgress(nextProgress);
+        void saveProgress(nextProgress);
+
+        if (importedBooks.some((item) => item.id === book.id)) {
+          const nextBooks = importedBooks.map((item) =>
+            item.id === book.id ? preparedBook : item,
+          );
+          setImportedBooks(nextBooks);
+          void saveImportedBooks(nextBooks);
+        }
+      }
+    }
     readerProgress.setValue(0);
-    setCurrentBook(book);
+    setCurrentBook(preparedBook);
     requestAnimationFrame(() => {
       Animated.timing(readerProgress, {
         toValue: 1,

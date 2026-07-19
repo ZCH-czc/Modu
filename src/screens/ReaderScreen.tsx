@@ -6,6 +6,7 @@ import {
   } from "expo-keep-awake";
 import { useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState } from "react";
@@ -124,6 +125,7 @@ export function ReaderScreen({
   const pageTransition = useRef(new Animated.Value(0)).current;
   const dragTranslate = useRef(new Animated.Value(0)).current;
   const pageAnimatingRef = useRef(false);
+  const pendingPageResetRef = useRef<number | undefined>(undefined);
   const pageCacheRef = useRef(new Map<number, string[]>());
   const pageBookKey = `${book.id}:${book.onlineChapterIndex ?? "local"}:${book.pages.length}`;
   const pageRuntimeRef = useRef<ReaderPageRuntimeState>({
@@ -306,17 +308,28 @@ export function ReaderScreen({
       pageRuntimeRef.current = {
         bookKey: pageBookKey,
         currentIndex: next,
-        phase: "ready",
+        phase: "settling",
       };
+      pendingPageResetRef.current = next;
       setPageIndex(next);
       onPageChange(next);
-      dragTranslate.setValue(0);
-      pageTransition.setValue(0);
-      pageOpacity.setValue(1);
-      pageAnimatingRef.current = false;
     },
-    [dragTranslate, onPageChange, pageBookKey, pageOpacity, pageTransition],
+    [onPageChange, pageBookKey],
   );
+
+  useLayoutEffect(() => {
+    if (pendingPageResetRef.current !== pageIndex) return;
+    dragTranslate.setValue(0);
+    pageTransition.setValue(0);
+    pageOpacity.setValue(1);
+    pendingPageResetRef.current = undefined;
+    pageAnimatingRef.current = false;
+    pageRuntimeRef.current = {
+      bookKey: pageBookKey,
+      currentIndex: pageIndex,
+      phase: "ready",
+    };
+  }, [dragTranslate, pageBookKey, pageIndex, pageOpacity, pageTransition]);
   const selectChapter = useCallback(
     (entry: ChapterEntry) => {
       closeChapterList();
@@ -466,18 +479,18 @@ export function ReaderScreen({
     });
   }, [book.pages.length, dragTranslate, pageIndex, screenWidth]);
 
-  const previousPageTranslate = useMemo(
+  const previousPageOpacity = useMemo(
     () => dragTranslate.interpolate({
-      inputRange: [-screenWidth, 0, screenWidth],
-      outputRange: [-screenWidth, -screenWidth, 0],
+      inputRange: [-screenWidth, 0, 1, screenWidth],
+      outputRange: [0, 0, 1, 1],
       extrapolate: "clamp",
     }),
     [dragTranslate, screenWidth],
   );
-  const nextPageTranslate = useMemo(
+  const nextPageOpacity = useMemo(
     () => dragTranslate.interpolate({
-      inputRange: [-screenWidth, 0, screenWidth],
-      outputRange: [0, screenWidth, screenWidth],
+      inputRange: [-screenWidth, -1, 0, screenWidth],
+      outputRange: [1, 1, 0, 0],
       extrapolate: "clamp",
     }),
     [dragTranslate, screenWidth],
@@ -706,7 +719,8 @@ export function ReaderScreen({
                   left: (screenWidth - readingColumnWidth) / 2,
                   paddingHorizontal: preferences.horizontalPadding,
                   width: readingColumnWidth,
-                  transform: [{ translateX: previousPageTranslate }],
+                  opacity: previousPageOpacity,
+                  backgroundColor: palette.background,
                 },
               ]}
             >
@@ -724,7 +738,8 @@ export function ReaderScreen({
                   left: (screenWidth - readingColumnWidth) / 2,
                   paddingHorizontal: preferences.horizontalPadding,
                   width: readingColumnWidth,
-                  transform: [{ translateX: nextPageTranslate }],
+                  opacity: nextPageOpacity,
+                  backgroundColor: palette.background,
                 },
               ]}
             >
@@ -742,6 +757,7 @@ export function ReaderScreen({
               styles.readingColumn,
               {
                 opacity: combinedPageOpacity,
+                backgroundColor: palette.background,
                 width: readingColumnWidth,
                 transform: [{ translateX: pageTranslate }],
               },
@@ -1014,7 +1030,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, overflow: "hidden" },
   readingColumn: { alignSelf: "center", flex: 1 },
   adjacentPage: { bottom: 0, position: "absolute", top: 0 },
-  pageContent: { minHeight: "100%", paddingBottom: 96, paddingTop: 34 },
+  pageContent: { minHeight: "100%", paddingBottom: 104, paddingTop: 12 },
   paragraph: { fontFamily: "serif", letterSpacing: 0.25 },
   leftTapArea: {
     bottom: 0,
