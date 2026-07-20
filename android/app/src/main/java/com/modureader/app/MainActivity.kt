@@ -3,6 +3,7 @@ import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -42,6 +43,16 @@ class MainActivity : ReactActivity() {
               mainComponentName,
               fabricEnabled
           ){})
+  }
+
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    if (!ReaderControlsModule.handles(event.keyCode)) {
+      return super.dispatchKeyEvent(event)
+    }
+    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+      ReaderControlsModule.emit(event.keyCode)
+    }
+    return true
   }
 
   /**

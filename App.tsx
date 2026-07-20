@@ -40,6 +40,11 @@ import { ReaderScreen } from "./src/screens/ReaderScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { LanTransferModal, type LanTransferRequest } from "./src/screens/LanTransferModal";
 import { WebReaderModal } from "./src/screens/WebReaderModal";
+import { searchLocalChapterBook } from "./src/services/localBookCache";
+import {
+  setVolumeKeyTurnsEnabled,
+  supportsVolumeKeyTurns,
+} from "./src/services/readerControls";
 import {
   clearOnlineChapterCache,
   countCachedOnlineChapters,
@@ -63,6 +68,7 @@ import {
   configureReminder,
   defaultPreferences,
   deleteImportedBook,
+  hydrateBook,
   importDocument,
   type ImportProgress,
   importBookFromUri,
@@ -74,6 +80,7 @@ import {
   loadProgress,
   persistEpubPagination,
   repaginateImportedTextBook,
+  unloadImportedTextBook,
   saveBookmarks,
   saveHiddenSampleBooks,
   saveImportedBooks,
@@ -144,6 +151,45 @@ function useEvent<T extends (...args: any[]) => any>(handler: T): T {
   return useCallback(((...args: Parameters<T>) => handlerRef.current(...args)) as T, []);
 }
 
+function getActiveChapterIndex(book: Book) {
+  return book.localChapterIndex ?? book.onlineChapterIndex;
+}
+
+function getLocalReadingPercentage(book: Book, readingProgress: ReadingProgress | undefined) {
+  const manifest = book.localChapterManifest;
+  if (!manifest?.length || !readingProgress) return undefined;
+  const chapterIndex = Math.max(
+    0,
+    Math.min(readingProgress.chapterIndex ?? book.localChapterIndex ?? 0, manifest.length - 1),
+  );
+  const previousPages = manifest
+    .slice(0, chapterIndex)
+    .reduce((total, chapter) => total + Math.max(1, chapter.pageCount), 0);
+  const totalPages = manifest.reduce(
+    (total, chapter) => total + Math.max(1, chapter.pageCount),
+    0,
+  );
+  return totalPages > 0
+    ? ((previousPages + Math.max(0, readingProgress.pageIndex) + 1) / totalPages) * 100
+    : 0;
+}
+function resolveLocalLegacyPosition(
+  book: Book,
+  globalPageIndex: number,
+) {
+  const manifest = book.localChapterManifest ?? [];
+  let remaining = Math.max(0, globalPageIndex);
+  for (let chapterIndex = 0; chapterIndex < manifest.length; chapterIndex += 1) {
+    const pageCount = Math.max(1, manifest[chapterIndex].pageCount);
+    if (remaining < pageCount) return { chapterIndex, pageIndex: remaining };
+    remaining -= pageCount;
+  }
+  const chapterIndex = Math.max(0, manifest.length - 1);
+  return {
+    chapterIndex,
+    pageIndex: Math.max(0, (manifest[chapterIndex]?.pageCount ?? 1) - 1),
+  };
+}
 function prepareBookForPagination(
   book: Book,
   layout: ReaderPaginationLayout,
@@ -162,11 +208,13 @@ function migrateBookmarks(
   bookId: string,
   oldPageCount: number,
   newPageCount: number,
+  chapterIndex?: number,
 ) {
   const oldLastPage = Math.max(oldPageCount - 1, 1);
   const newLastPage = Math.max(newPageCount - 1, 0);
   const migrated = bookmarks.map((bookmark) =>
-    bookmark.bookId === bookId
+    bookmark.bookId === bookId &&
+      (chapterIndex === undefined || bookmark.chapterIndex === chapterIndex)
       ? {
           ...bookmark,
           pageIndex: Math.min(
@@ -355,6 +403,7 @@ function AppContent() {
 
   const closeReader = () => {
     if (!currentBook) return;
+    setVolumeKeyTurnsEnabled(false);
     readerProgress.stopAnimation();
     Animated.timing(readerProgress, {
       toValue: 0,
@@ -476,8 +525,10 @@ function AppContent() {
   const books = useMemo(
     () =>
       [...sampleBooks.filter((book) => !hiddenSampleIds.includes(book.id)), ...importedBooks, ...onlineBooks].map((book) => {
-        const pageIndex = progress[book.id]?.pageIndex ?? 0;
-        const pageCount = Math.max(book.pages.length, 1);
+        const readingProgress = progress[book.id];
+        const pageIndex = readingProgress?.pageIndex ?? 0;
+        const pageCount = Math.max(book.pages.length || book.pageCount || 0, 1);
+        const localReadingPercentage = getLocalReadingPercentage(book, readingProgress);
         const appearance = bookAppearances[book.id];
         return {
           ...book,
@@ -486,11 +537,13 @@ function AppContent() {
           coverImageUri: appearance?.mode === "image" ? appearance.imageUri : undefined,
           lastOpenedAt: progress[book.id]?.updatedAt ?? book.importedAt ?? 0,
           progress:
-            book.format === "web"
-              ? book.progress
-              : pageIndex === 0
+            localReadingPercentage ?? (
+              book.format === "web"
                 ? book.progress
-                : ((pageIndex + 1) / pageCount) * 100,
+                : pageIndex === 0
+                  ? book.progress
+                  : ((pageIndex + 1) / pageCount) * 100
+            ),
         };
       }),
     [bookAppearances, hiddenSampleIds, importedBooks, onlineBooks, progress, sampleBooks],
@@ -555,7 +608,7 @@ function AppContent() {
     try {
       const book = await importDocument(importedBooks, updateImportProgress);
       if (book) {
-        setImportedBooks((items) => [...items, book]);
+        setImportedBooks((items) => [...items, unloadImportedTextBook(book)]);
         await new Promise((resolve) => setTimeout(resolve, 220));
         Alert.alert("导入成功", "《" + book.title + "》已加入书架。");
       }
@@ -589,7 +642,11 @@ function AppContent() {
       );
       const nextProgress = {
         ...pendingProgress.current,
-        [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
+        [book.id]: {
+          pageIndex: migratedPage,
+          chapterIndex: getActiveChapterIndex(book),
+          updatedAt: Date.now(),
+        },
       };
       pendingProgress.current = nextProgress;
       setProgress(nextProgress);
@@ -600,18 +657,24 @@ function AppContent() {
           book.id,
           book.pages.length,
           preparedBook.pages.length,
+          getActiveChapterIndex(book),
         );
         void saveBookmarks(next);
         return next;
       });      setAnnotations((items) => {
-        const next = migrateAnnotationsForPagination(items, book.id, preparedBook.pages);
+        const next = migrateAnnotationsForPagination(
+          items,
+          book.id,
+          preparedBook.pages,
+          getActiveChapterIndex(book),
+        );
         void saveAnnotations(next);
         return next;
       });
 
       if (importedBooks.some((item) => item.id === book.id)) {
         const nextBooks = importedBooks.map((item) =>
-          item.id === book.id ? preparedBook : item,
+          item.id === book.id ? unloadImportedTextBook(preparedBook) : item,
         );
         setImportedBooks(nextBooks);
         void saveImportedBooks(nextBooks);
@@ -648,7 +711,11 @@ function AppContent() {
     );
     const nextProgress = {
       ...pendingProgress.current,
-      [book.id]: { pageIndex: migratedPage, updatedAt: Date.now() },
+      [book.id]: {
+          pageIndex: migratedPage,
+          chapterIndex: getActiveChapterIndex(book),
+          updatedAt: Date.now(),
+        },
     };
     const nextBook: Book = {
       ...prepared,
@@ -665,18 +732,24 @@ function AppContent() {
         book.id,
         book.pages.length,
         nextBook.pages.length,
+        getActiveChapterIndex(book),
       );
       void saveBookmarks(next);
       return next;
     });    setAnnotations((items) => {
-      const next = migrateAnnotationsForPagination(items, book.id, nextBook.pages);
+      const next = migrateAnnotationsForPagination(
+        items,
+        book.id,
+        nextBook.pages,
+        getActiveChapterIndex(book),
+      );
       void saveAnnotations(next);
       return next;
     });
 
     if (importedBooks.some((item) => item.id === book.id)) {
       const nextBooks = importedBooks.map((item) =>
-        item.id === book.id ? nextBook : item,
+        item.id === book.id ? unloadImportedTextBook(nextBook) : item,
       );
       setImportedBooks(nextBooks);
       void saveImportedBooks(nextBooks);
@@ -695,7 +768,7 @@ function AppContent() {
       const existing = items.find(
         (bookmark) =>
           bookmark.bookId === book.id &&
-          bookmark.chapterIndex === book.onlineChapterIndex &&
+          bookmark.chapterIndex === getActiveChapterIndex(book) &&
           bookmark.pageIndex === pageIndex,
       );
       const next = existing
@@ -706,7 +779,7 @@ function AppContent() {
               id: `${book.id}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
               bookId: book.id,
               pageIndex,
-              chapterIndex: book.onlineChapterIndex,
+              chapterIndex: getActiveChapterIndex(book),
               chapterTitle,
               excerpt,
               createdAt: Date.now(),
@@ -956,8 +1029,65 @@ function AppContent() {
       });
       return;
     }
-    if (book.format === "epub" && book.pages.length === 0) {
-      Alert.alert("内容不可用", "请删除该书后重新导入。");
+    if ((book.format === "epub" || book.format === "txt") && book.pages.length === 0) {
+      if (!book.contentUri) {
+        Alert.alert("内容不可用", "请删除该书后重新导入。");
+        return;
+      }
+      const saved = pendingProgress.current[book.id];
+      setOnlineLoading(true);
+      void hydrateBook(book, saved?.chapterIndex, saved?.pageIndex ?? 0)
+        .then((hydrated) => {
+          const pageIndex = hydrated.localPageIndex ?? saved?.pageIndex ?? 0;
+          const chapterIndex = hydrated.localChapterIndex;
+          const nextProgress = {
+            ...pendingProgress.current,
+            [book.id]: { pageIndex, chapterIndex, updatedAt: saved?.updatedAt ?? Date.now() },
+          };
+          pendingProgress.current = nextProgress;
+          setProgress(nextProgress);
+          if (hydrated.localChapterManifest?.length) {
+            setBookmarks((items) => {
+              let changed = false;
+              const next = items.map((bookmark) => {
+                if (bookmark.bookId !== hydrated.id || bookmark.chapterIndex !== undefined) {
+                  return bookmark;
+                }
+                changed = true;
+                return { ...bookmark, ...resolveLocalLegacyPosition(hydrated, bookmark.pageIndex) };
+              });
+              if (changed) void saveBookmarks(next);
+              return next;
+            });
+            setAnnotations((items) => {
+              let changed = false;
+              const next = items.map((annotation) => {
+                if (annotation.bookId !== hydrated.id || annotation.chapterIndex !== undefined) {
+                  return annotation;
+                }
+                changed = true;
+                return { ...annotation, ...resolveLocalLegacyPosition(hydrated, annotation.pageIndex) };
+              });
+              if (changed) void saveAnnotations(next);
+              return next;
+            });
+            setImportedBooks((items) => {
+              const next = items.map((item) =>
+                item.id === hydrated.id ? unloadImportedTextBook(hydrated) : item,
+              );
+              void saveImportedBooks(next);
+              return next;
+            });
+          }
+          presentBook(hydrated);
+        })
+        .catch((error) => {
+          Alert.alert(
+            "无法打开",
+            error instanceof Error ? error.message : "暂时无法读取这本书的正文。",
+          );
+        })
+        .finally(() => setOnlineLoading(false));
       return;
     }
     presentBook(book);
@@ -1006,6 +1136,7 @@ function AppContent() {
         ...pendingProgress.current,
         [book.id]: {
           pageIndex: targetPage,
+          chapterIndex: nextIndex,
           updatedAt: Date.now(),
         },
       };
@@ -1027,7 +1158,90 @@ function AppContent() {
     }
   };
 
+  const openLocalChapterAt = async (
+    nextIndex: number,
+    initialPosition: "start" | "end" = "start",
+    requestedTargetPage?: number,
+  ) => {
+    const book = currentBook;
+    const manifest = book?.localChapterManifest;
+    if (!book || !manifest?.length || onlineLoading) return;
+    if (nextIndex < 0 || nextIndex >= manifest.length) return;
+
+    setOnlineLoading(true);
+    try {
+      const requestedPage = requestedTargetPage ?? (
+        initialPosition === "end"
+          ? Math.max(0, manifest[nextIndex].pageCount - 1)
+          : 0
+      );
+      const unloaded: Book = {
+        ...book,
+        pages: [],
+        pageTitles: [],
+        localChapters: undefined,
+        localPageIndex: undefined,
+      };
+      const hydrated = await hydrateBook(unloaded, nextIndex, requestedPage);
+      const layout = createReaderPaginationLayout(
+        screenWidth,
+        screenHeight,
+        preferencesRef.current,
+      );
+      const prepared = prepareBookForPagination(hydrated, layout);
+      const targetPage = requestedTargetPage !== undefined
+        ? Math.min(
+            Math.max(0, prepared.pages.length - 1),
+            Math.round(
+              (requestedPage / Math.max(hydrated.pages.length - 1, 1)) *
+              Math.max(prepared.pages.length - 1, 0),
+            ),
+          )
+        : initialPosition === "end"
+          ? Math.max(0, prepared.pages.length - 1)
+          : 0;
+      const opened: Book = {
+        ...prepared,
+        localPageIndex: targetPage,
+        paginationVersion: (book.paginationVersion ?? 0) + 1,
+      };
+      const nextProgress = {
+        ...pendingProgress.current,
+        [book.id]: {
+          pageIndex: targetPage,
+          chapterIndex: nextIndex,
+          updatedAt: Date.now(),
+        },
+      };
+      pendingProgress.current = nextProgress;
+      progressDirty.current = true;
+      setProgress(nextProgress);
+      setCurrentBook(opened);
+      setImportedBooks((items) => {
+        const next = items.map((item) =>
+          item.id === opened.id ? unloadImportedTextBook(opened) : item,
+        );
+        void saveImportedBooks(next);
+        return next;
+      });
+      void persistEpubPagination(opened);
+    } catch (error) {
+      Alert.alert(
+        "章节加载失败",
+        error instanceof Error ? error.message : "请稍后重试。",
+      );
+    } finally {
+      setOnlineLoading(false);
+    }
+  };
   const handleChapterBoundary = (direction: -1 | 1) => {
+    if (currentBook?.localChapterManifest?.length) {
+      void openLocalChapterAt(
+        (currentBook.localChapterIndex ?? 0) + direction,
+        direction < 0 ? "end" : "start",
+      );
+      return;
+    }
     if (!onlineSession) return;
     void openOnlineChapterAt(
       onlineSession.index + direction,
@@ -1035,10 +1249,13 @@ function AppContent() {
     );
   };
 
-  const handleChapterSelect = (chapterIndex: number) => {
+  const handleChapterSelect = (chapterIndex: number, pageIndex?: number) => {
+    if (currentBook?.localChapterManifest?.length) {
+      void openLocalChapterAt(chapterIndex, "start", pageIndex);
+      return;
+    }
     void openOnlineChapterAt(chapterIndex, "start");
   };
-
   const handleDownloadAll = async () => {
     const book = currentBook;
     const chapters = onlineSession?.chapters ?? book?.onlineChapters ?? [];
@@ -1123,7 +1340,11 @@ function AppContent() {
     if (!preferences.autoSync) return;
     const next = {
       ...pendingProgress.current,
-      [currentBook.id]: { pageIndex, updatedAt: Date.now() },
+      [currentBook.id]: {
+        pageIndex,
+        chapterIndex: getActiveChapterIndex(currentBook),
+        updatedAt: Date.now(),
+      },
     };
     pendingProgress.current = next;
     progressDirty.current = true;
@@ -1337,8 +1558,12 @@ function AppContent() {
     setProgress({});
   };
 
-  const handleVolumeKeys = () => {
-    Alert.alert("当前设备暂不支持", "音量键翻页将在支持的设备上自动启用。");
+  const handleVolumeKeys = (enabled: boolean) => {
+    if (enabled && !supportsVolumeKeyTurns) {
+      Alert.alert("当前设备暂不支持", "音量键翻页目前仅支持 Android 客户端。");
+      return;
+    }
+    updatePreferences({ volumeKeys: enabled });
   };
   const handleReadingGoalChange = (minutes: number) => {
     const normalized = Math.max(5, Math.min(180, Math.round(minutes / 5) * 5));
@@ -1354,7 +1579,7 @@ function AppContent() {
       request.size,
       importedBooks,
     );
-    setImportedBooks((items) => [...items, book]);
+    setImportedBooks((items) => [...items, unloadImportedTextBook(book)]);
   };
 
   const stableHandleLanTransferAccept = useEvent(handleLanTransferAccept);
@@ -1578,20 +1803,24 @@ function AppContent() {
                 book={currentBook}
                 annotations={annotations.filter((annotation) =>
                   annotation.bookId === currentBook.id &&
-                  annotation.chapterIndex === currentBook.onlineChapterIndex
+                  annotation.chapterIndex === getActiveChapterIndex(currentBook)
                 )}
                 bookmarks={bookmarks.filter((bookmark) =>
                   bookmark.bookId === currentBook.id &&
-                  bookmark.chapterIndex === currentBook.onlineChapterIndex
+                  bookmark.chapterIndex === getActiveChapterIndex(currentBook)
                 )}
-                canNextChapter={Boolean(onlineSession && onlineSession.index < onlineSession.chapters.length - 1)}
-                canPreviousChapter={Boolean(onlineSession && onlineSession.index > 0)}
-                initialPage={
-                  currentBook.format === "web" && onlineSession
-                    ? (pendingProgress.current[currentBook.id]?.pageIndex ?? 0)
-                    : (progress[currentBook.id]?.pageIndex ?? 0)
-                }
-                key={`${currentBook.id}-${currentBook.paginationVersion ?? 0}`}
+                canNextChapter={Boolean(
+                  currentBook.localChapterManifest?.length
+                    ? (currentBook.localChapterIndex ?? 0) < currentBook.localChapterManifest.length - 1
+                    : onlineSession && onlineSession.index < onlineSession.chapters.length - 1
+                )}
+                canPreviousChapter={Boolean(
+                  currentBook.localChapterManifest?.length
+                    ? (currentBook.localChapterIndex ?? 0) > 0
+                    : onlineSession && onlineSession.index > 0
+                )}
+                initialPage={pendingProgress.current[currentBook.id]?.pageIndex ?? 0}
+                key={`${currentBook.id}-${currentBook.localChapterIndex ?? "all"}-${currentBook.paginationVersion ?? 0}`}
                 onBack={closeReader}
                 onDeleteAnnotation={handleDeleteAnnotation}
                 onSaveAnnotation={handleSaveAnnotation}
@@ -1600,7 +1829,16 @@ function AppContent() {
                   downloadState?.bookId === currentBook.id ? downloadState : undefined
                 }
                 onChapterBoundary={handleChapterBoundary}
-                onChapterSelect={currentBook.format === "web" ? handleChapterSelect : undefined}
+                onChapterSelect={
+                  currentBook.format === "web" || currentBook.localChapterManifest?.length
+                    ? handleChapterSelect
+                    : undefined
+                }
+                onSearchBook={
+                  currentBook.localChapterManifest?.length
+                    ? (query) => searchLocalChapterBook(currentBook, query)
+                    : undefined
+                }
                 onDownloadAll={currentBook.format === "web" ? () => void handleDownloadAll() : undefined}
                 onOpenOriginal={currentBook.format === "webclip" ? openCapturedWebPage : undefined}
                 onPageChange={handlePageChange}
@@ -1627,6 +1865,7 @@ function AppContent() {
           initialExtraction={webReaderInitialExtraction}
           initialUrl={webReaderInitialUrl}
           readerFont={preferences.fontFamily}
+          volumeKeysEnabled={preferences.volumeKeys}
           webReaderFlow={preferences.webReaderFlow}
           onWebReaderFlowChange={(webReaderFlow) => stableUpdatePreferences({ webReaderFlow })}
           onAdd={stableHandleAddWebCapture}

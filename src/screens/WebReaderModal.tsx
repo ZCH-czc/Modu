@@ -3,6 +3,7 @@ import {
   Ionicons } from "@expo/vector-icons";
 import { useCallback,
   useEffect,
+  memo,
   useMemo,
   useRef,
   useState } from "react";
@@ -36,6 +37,11 @@ import {
 import { useAppAlert } from "../components/AppDialog";
 import type { ReaderFont, WebChapterExtraction, WebPageExtraction, WebReaderFlow } from "../types";
 import { getReaderFontFamily, readerFontOptions } from "../utils/readerFonts";
+import {
+  setVolumeKeyTurnsEnabled,
+  subscribeToVolumeKeyTurns,
+  supportsVolumeKeyTurns,
+} from "../services/readerControls";
 
 type WebVisit = { url: string; title: string; visitedAt: number };
 type BrowserPanel = "history" | undefined;
@@ -60,6 +66,7 @@ type Props = {
   readerFont: ReaderFont;
   onReaderFontChange: (font: ReaderFont) => void;
   webReaderFlow: WebReaderFlow;
+  volumeKeysEnabled: boolean;
   onWebReaderFlowChange: (flow: WebReaderFlow) => void;
 };
 
@@ -73,13 +80,57 @@ const READER_MODE_THEMES: Record<ReaderModeTheme,{background:string;text:string;
 };
 const READER_THEME_OPTIONS: ReaderModeTheme[]=["paper","white","green","night"];
 
+type WebReaderParagraphsProps = {
+  color: string;
+  content: string;
+  contentKey: string;
+  fontFamily?: string;
+  fontSize: number;
+  selectable?: boolean;
+};
+
+const WebReaderParagraphs = memo(function WebReaderParagraphs({
+  color,
+  content,
+  contentKey,
+  fontFamily,
+  fontSize,
+  selectable = false,
+}: WebReaderParagraphsProps) {
+  const paragraphs = useMemo(
+    () => content.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean),
+    [content],
+  );
+  return (
+    <>
+      {paragraphs.map((paragraph, index) => (
+        <Text
+          key={`${contentKey}-${index}`}
+          selectable={selectable}
+          style={[
+            styles.readerParagraph,
+            {
+              color,
+              fontFamily,
+              fontSize,
+              lineHeight: fontSize * 1.82,
+            },
+          ]}
+        >
+          {paragraph}
+        </Text>
+      ))}
+    </>
+  );
+});
+
 const START_HTML = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 html,body{height:100%;margin:0;background:#f7f4ed;color:#24332b;font-family:system-ui,sans-serif}body{display:grid;place-items:center}.card{width:min(82vw,520px);text-align:center}.mark{width:76px;height:76px;border-radius:24px;margin:auto;display:grid;place-items:center;background:#e6eee8;color:#4f705e;font-size:34px}.title{font-size:28px;font-weight:700;margin:24px 0 10px}.text{font-size:15px;line-height:1.7;color:#7e837f}.hint{margin-top:28px;padding:14px 18px;border:1px solid #dedbd3;border-radius:18px;background:#fbfaf6;color:#56675e;font-size:14px}
 </style></head><body><div class="card"><div class="mark">◌</div><div class="title">去故事生长的地方</div><div class="text">输入网址、书名或作者。<br>打开正文，让墨读替你拂去喧闹。</div><div class="hint">只带回你能够正常抵达的文字</div></div></body></html>`;
 
 const EXTRACTION_SCRIPT = "\n(function () {\n  try {\n    if (!/^https?:$/.test(location.protocol)) throw new Error('请先打开具体网页');\n    var copy = document.cloneNode(true);\n    copy.querySelectorAll('script,style,noscript,svg,canvas,iframe,video,audio,nav,footer,form,input,textarea,select,button,[role=\"navigation\"],[aria-hidden=\"true\"],.ad,.ads,.advertisement,.recommend,.related,.comment,.comments').forEach(function (node) { node.remove(); });\n    var selectors = ['article','main','[role=\"main\"]','#chaptercontent','#content','#content1','.chapter-content','.read-content','.reading-content','.article-content','.entry-content','.post-content','.novel-content','.content'];\n    var candidates = [];\n    selectors.forEach(function (selector) { copy.querySelectorAll(selector).forEach(function (node) { if (candidates.indexOf(node) < 0) candidates.push(node); }); });\n    if (copy.body) candidates.push(copy.body);\n    var best = null, bestScore = -1;\n    candidates.forEach(function (node) {\n      var text = (node.innerText || node.textContent || '').trim();\n      if (text.length < 120) return;\n      var links = Array.prototype.slice.call(node.querySelectorAll('a')).reduce(function (sum, link) { return sum + (link.textContent || '').trim().length; }, 0);\n      var score = text.length + node.querySelectorAll('p,br').length * 80 + (/chapter|article|read|content|novel|text/.test(((node.id || '') + ' ' + (node.className || '')).toLowerCase()) ? 1200 : 0) - links * 1.6;\n      if (score > bestScore) { best = node; bestScore = score; }\n    });\n    if (!best) throw new Error('没有识别到足够长的正文');\n    best.querySelectorAll('br').forEach(function (br) { br.replaceWith('\\n'); });\n    var lines = (best.innerText || best.textContent || '').split(/\\n+/).map(function (line) { return line.replace(/[\\t\\u00a0 ]+/g, ' ').trim(); }).filter(function (line) { return line.length > 0; });\n    var content = lines.join('\\n\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n    if (content.length < 120) throw new Error('正文太短，请打开具体章节后重试');\n    if (content.length > 500000) content = content.slice(0, 500000);\n    var heading = document.querySelector('article h1, main h1, h1');\n    var title = ((heading && heading.textContent) || document.title || '网页摘录').replace(/[\\t\\n]+/g, ' ').replace(/\\s{2,}/g, ' ').trim();\n    var bookNode = document.querySelector('meta[property=\"og:novel:book_name\"],meta[property$=\"book_name\"],meta[name=\"book_name\"],meta[property=\"og:title\"]');\n    var bookTitle = bookNode ? (bookNode.getAttribute('content') || '') : '';\n    if (!bookTitle) bookTitle = title.replace(/(?:第.{1,16}[章节回卷集部篇]|chapter\\s*\\d+)[\\s\\S]*$/i, '').replace(/[-_|].*$/, '').trim();\n    var authorNode = document.querySelector('meta[name=\"author\"],meta[property$=\"author\"],[rel=\"author\"],.author,[class*=\"author\"],[id*=\"author\"]');\n    var author = authorNode ? (authorNode.getAttribute('content') || authorNode.textContent || '') : '';\n    if (!author) { var m = ((document.body && document.body.innerText) || '').slice(0,1200).match(/(?:作者|作\\s*者)\\s*[：:]\\s*([^\\n]{1,32})/); author = m ? m[1] : ''; }\n    author = author.replace(/^(?:作者|作\\s*者)\\s*[：:]?\\s*/, '').trim();\n    var tocUrl = '';\n    Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var tocLabel = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(目录|章节目录|全部章节|章节列表|返回目录|返回书页|书籍首页|更多章节|contents?|catalog)$/i.test(tocLabel) && link.href) { tocUrl = link.href; return true; }\n      return false;\n    });\n    var nextUrl = '', relNext = document.querySelector('link[rel=\"next\"],a[rel=\"next\"]');\n    if (relNext) nextUrl = relNext.href || relNext.getAttribute('href') || '';\n    if (!nextUrl) Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var label = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(下一章|下章|下一页|下一篇|继续阅读|nextchapter|next)$/i.test(label) && link.href) { nextUrl = link.href; return true; }\n      return false;\n    });\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction', payload:{ bookTitle:bookTitle.slice(0,120), title:title.slice(0,120), author:author.slice(0,80), content:content, url:location.href, nextUrl:nextUrl, tocUrl:tocUrl } }));\n  } catch (error) {\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction-error', message:error && error.message ? error.message : '正文提取失败' }));\n  }\n})();\ntrue;\n";
 
-export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange }: Props) {
+export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange, volumeKeysEnabled }: Props) {
   const Alert = useAppAlert();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
@@ -108,6 +159,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   const [readerTheme,setReaderTheme]=useState<ReaderModeTheme>("paper");
   const [readerFontSize,setReaderFontSize]=useState(19);
   const [readerPageIndex,setReaderPageIndex]=useState(0);
+  const [readerPageGestureLocked,setReaderPageGestureLocked]=useState(false);
   const [readerPanel,setReaderPanel]=useState<ReaderPanel>();
   const [readerLoading,setReaderLoading]=useState(false);
   const savedBookRef=useRef(false);
@@ -140,12 +192,21 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
     const pages=paginateReaderContent(chapter.content,readerPageLimit);
     return {chapter,pages,pageIndex:0};
   },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerPageLimit]);
-  const previousReaderPageOpacity=readerPageDrag.interpolate({
-    inputRange:[-1,0,screenWidth],outputRange:[0,0,1],extrapolate:"clamp",
-  });
-  const nextReaderPageOpacity=readerPageDrag.interpolate({
-    inputRange:[-screenWidth,0,1],outputRange:[1,0,0],extrapolate:"clamp",
-  });
+
+  const previousReaderPageTranslate=useMemo(()=>readerPageDrag.interpolate({
+    inputRange:[-screenWidth,0,screenWidth],outputRange:[-screenWidth,-screenWidth,0],extrapolate:"clamp",
+  }),[readerPageDrag,screenWidth]);
+  const nextReaderPageTranslate=useMemo(()=>readerPageDrag.interpolate({
+    inputRange:[-screenWidth,0,screenWidth],outputRange:[0,screenWidth,screenWidth],extrapolate:"clamp",
+  }),[readerPageDrag,screenWidth]);
+
+  useEffect(()=>{
+    if(visible&&readerMode&&webReaderFlow==="paged")return;
+    readerPageDrag.stopAnimation();
+    readerPageDrag.setValue(0);
+    readerPageAnimatingRef.current=false;
+    setReaderPageGestureLocked(false);
+  },[readerMode,readerPageDrag,visible,webReaderFlow]);
 
   const source = useMemo(() => (url ? { uri: url } : { html: START_HTML }), [url]);
   const suggestions = useMemo(() => {
@@ -491,21 +552,24 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   const canTurnReaderPrevious=readerPageIndex>0||readerIndex>0;
   const canTurnReaderNext=readerPageIndex<readerPages.length-1||readerIndex<readerHistory.length-1||Boolean(preview?.nextUrl);
   const settleReaderPage=()=>{
+    readerPageAnimatingRef.current=true;
+    setReaderPageGestureLocked(true);
     RNAnimated.timing(readerPageDrag,{toValue:0,duration:150,easing:Easing.out(Easing.cubic),useNativeDriver:true})
-      .start(()=>{readerPageAnimatingRef.current=false;});
+      .start(()=>{readerPageAnimatingRef.current=false;setReaderPageGestureLocked(false);});
   };
   const turnReaderPage=(direction:-1|1)=>{
     if(webReaderFlow!=="paged"||readerPageAnimatingRef.current||readerLoading)return;
     const canTurn=direction<0?canTurnReaderPrevious:canTurnReaderNext;
     if(!canTurn){settleReaderPage();return;}
     readerPageAnimatingRef.current=true;
+    setReaderPageGestureLocked(true);
     RNAnimated.timing(readerPageDrag,{
       toValue:direction*-screenWidth,
       duration:170,
       easing:Easing.out(Easing.cubic),
       useNativeDriver:true,
     }).start(({finished})=>{
-      if(!finished){readerPageAnimatingRef.current=false;return;}
+      if(!finished){readerPageAnimatingRef.current=false;setReaderPageGestureLocked(false);return;}
       if(direction<0){
         if(readerPageIndex>0)setReaderPageIndex((page)=>page-1);
         else openReaderChapter(readerIndex-1,"end");
@@ -517,9 +581,24 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
       requestAnimationFrame(()=>{
         readerPageDrag.setValue(0);
         readerPageAnimatingRef.current=false;
+        setReaderPageGestureLocked(false);
       });
     });
   };
+  const volumePageTurnRef=useRef(turnReaderPage);
+  volumePageTurnRef.current=turnReaderPage;
+  useEffect(()=>{
+    const enabled=volumeKeysEnabled&&visible&&readerMode&&webReaderFlow==="paged"&&supportsVolumeKeyTurns;
+    if(!enabled)return;
+    setVolumeKeyTurnsEnabled(true);
+    const subscription=subscribeToVolumeKeyTurns((direction)=>{
+      volumePageTurnRef.current(direction==="previous"?-1:1);
+    });
+    return()=>{
+      subscription.remove();
+      setVolumeKeyTurnsEnabled(false);
+    };
+  },[readerMode,visible,volumeKeysEnabled,webReaderFlow]);
   const onReaderPageGesture=useMemo(
     ()=>RNAnimated.event<PanGestureHandlerGestureEvent>(
       [{nativeEvent:{translationX:readerPageDrag}}],
@@ -832,11 +911,14 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                   <Text style={[styles.readerTitle,{color:readerPalette.text,fontFamily:readerFontFamily}]}>{preview.title}</Text>
                   <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{t("{source} · 第 {chapter} 章", { source: preview.author || t("摘自当前网页"), chapter: readerIndex + 1 })}</Text>
                   <View style={[styles.readerRule,{backgroundColor:`${readerPalette.muted}35`}]}/>
-                  {preview.content.split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean).map((paragraph,index)=>(
-                    <Text key={preview.url+"-"+index} selectable style={[styles.readerParagraph,{color:readerPalette.text,fontFamily:readerFontFamily,fontSize:readerFontSize,lineHeight:readerFontSize*1.82}]}>
-                      {paragraph}
-                    </Text>
-                  ))}
+                  <WebReaderParagraphs
+                    color={readerPalette.text}
+                    content={preview.content}
+                    contentKey={preview.url}
+                    fontFamily={readerFontFamily}
+                    fontSize={readerFontSize}
+                    selectable
+                  />
                   <View style={styles.readerEnd}>
                     <View style={[styles.readerEndLine,{backgroundColor:`${readerPalette.muted}45`}]}/>
                     <Ionicons color={readerPalette.accent} name="leaf-outline" size={18}/>
@@ -847,16 +929,17 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
             ) : (
               <PanGestureHandler
                 activeOffsetX={[-10,10]}
+                enabled={!readerPageGestureLocked}
                 failOffsetY={[-14,14]}
                 onGestureEvent={onReaderPageGesture}
                 onHandlerStateChange={onReaderPageGestureStateChange}
               >
                 <RNAnimated.View style={[styles.readerPaged,{paddingBottom:88+insets.bottom}]}>
                   {[
-                    {key:"previous",snapshot:previousReaderPage,opacity:previousReaderPageOpacity},
-                    {key:"next",snapshot:nextReaderPage,opacity:nextReaderPageOpacity},
-                  ].map(({key,snapshot,opacity})=>snapshot ? (
-                    <RNAnimated.View key={key} pointerEvents="none" style={[styles.readerAdjacentPage,{opacity}]}>
+                    {key:"previous",snapshot:previousReaderPage,translateX:previousReaderPageTranslate},
+                    {key:"next",snapshot:nextReaderPage,translateX:nextReaderPageTranslate},
+                  ].map(({key,snapshot,translateX})=>snapshot ? (
+                    <RNAnimated.View key={key} pointerEvents="none" style={[styles.readerAdjacentPage,{transform:[{translateX}]}]}>
                       <View style={[styles.readerPagedBody,{width:readerColumnWidth}]}>
                         {snapshot.pageIndex===0 ? (
                           <>
@@ -868,11 +951,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                         ) : (
                           <Text numberOfLines={1} style={[styles.readerPagedChapter,{color:readerPalette.muted,fontFamily:readerFontFamily}]}>{snapshot.chapter.title}</Text>
                         )}
-                        {(snapshot.pages[snapshot.pageIndex]??"").split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean).map((paragraph,index)=>(
-                          <Text key={snapshot.chapter.url+"-adjacent-"+snapshot.pageIndex+"-"+index} style={[styles.readerParagraph,{color:readerPalette.text,fontFamily:readerFontFamily,fontSize:readerFontSize,lineHeight:readerFontSize*1.82}]}>
-                            {paragraph}
-                          </Text>
-                        ))}
+                        <WebReaderParagraphs
+                          color={readerPalette.text}
+                          content={snapshot.pages[snapshot.pageIndex]??""}
+                          contentKey={`${snapshot.chapter.url}-${snapshot.pageIndex}`}
+                          fontFamily={readerFontFamily}
+                          fontSize={readerFontSize}
+                        />
                         <Text style={[styles.readerPageNumber,{color:readerPalette.muted}]}>{snapshot.pageIndex+1} / {snapshot.pages.length}</Text>
                       </View>
                     </RNAnimated.View>
@@ -889,11 +974,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                     ) : (
                       <Text numberOfLines={1} style={[styles.readerPagedChapter,{color:readerPalette.muted,fontFamily:readerFontFamily}]}>{preview.title}</Text>
                     )}
-                    {(readerPages[readerPageIndex]??"").split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean).map((paragraph,index)=>(
-                      <Text key={preview.url+"-"+readerPageIndex+"-"+index} style={[styles.readerParagraph,{color:readerPalette.text,fontFamily:readerFontFamily,fontSize:readerFontSize,lineHeight:readerFontSize*1.82}]}>
-                        {paragraph}
-                      </Text>
-                    ))}
+                    <WebReaderParagraphs
+                      color={readerPalette.text}
+                      content={readerPages[readerPageIndex]??""}
+                      contentKey={`${preview.url}-${readerPageIndex}`}
+                      fontFamily={readerFontFamily}
+                      fontSize={readerFontSize}
+                    />
                     <Text style={[styles.readerPageNumber,{color:readerPalette.muted}]}>{readerPageIndex+1} / {readerPages.length}</Text>
                   </View>
                   </RNAnimated.View>

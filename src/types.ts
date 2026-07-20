@@ -14,6 +14,21 @@ export interface BookCoverAppearance {
   imageUri?: string;
 }
 
+export interface LocalChapterCacheEntry {
+  title: string;
+  uri: string;
+  pageCount: number;
+}
+
+export interface BookSearchResult {
+  key: string;
+  pageIndex: number;
+  chapterIndex?: number;
+  chapterTitle: string;
+  excerpt: string;
+  matchStart: number;
+  matchLength: number;
+}
 export interface Book {
   id: string;
   title: string;
@@ -26,6 +41,7 @@ export interface Book {
   accent: string;
   darkCover?: boolean;
   pages: string[];
+  pageCount?: number;
   pageTitles?: string[];
   paginationVersion?: number;
   format: BookFormat;
@@ -45,6 +61,9 @@ export interface Book {
   webNextUrl?: string;
   webCurrentChapterIndex?: number;
   localChapters?: Array<{ title: string; text: string }>;
+  localChapterManifest?: LocalChapterCacheEntry[];
+  localChapterIndex?: number;
+  localPageIndex?: number;
   onlineChapterIndex?: number;
   onlineChapterUrl?: string;
   onlineChapters?: OnlineChapter[];
@@ -122,6 +141,7 @@ export interface ReaderBookmark {
 
 export interface ReadingProgress {
   pageIndex: number;
+  chapterIndex?: number;
   updatedAt: number;
 }
 

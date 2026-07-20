@@ -6,6 +6,22 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-07-20
+
+### Changed
+- Store imported EPUB and TXT books as per-chapter cache files, loading only the active chapter while prefetching its neighbors and preserving cross-chapter progress, search, bookmarks, and annotations.
+- Keep imported EPUB and TXT content out of the bookshelf state, hydrating only the active book and migrating legacy TXT pages into a dedicated content cache.
+- Render PDF canvases in a bounded viewport window and recycle pages more than two positions away.
+
+### Fixed
+- Jump from full-book search results directly to the prepared target page without replaying intermediate page-turn animations.
+- Prevent rapid reverse page swipes from racing the active page-settle animation and leaving the reader locked.
+- Reduce reader memory and layout pressure by bounding the paragraph cache and memoizing the current and adjacent pre-laid-out pages.
+- Keep paragraph spacing identical before, during, and after a page turn, and move both pages together in slide mode to eliminate the post-animation text jump.
+
+### Added
+- Implement Android volume-key page turns across EPUB/TXT, PDF, and the paged Web Reader, restoring normal volume behavior as soon as reading closes.
+
 ## [1.5.6] - 2026-07-20
 
 ### Changed
@@ -15,6 +31,7 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 - Keep the native reader mounted across online chapter changes and synchronize the new chapter before paint.
 
 ### Fixed
+- Jump from full-book search results directly to the prepared target page without replaying intermediate page-turn animations.
 - Repaired corrupted Simplified Chinese labels in bookshelf sorting, empty states, and in-book search.
 - Hid inactive tabs and the bookshelf layer from accessibility and pointer input while another page or the reader is active.
 - Retry transient book-source network failures once and fall back to the internal browser bridge when native TLS or socket requests fail.
@@ -43,6 +60,7 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 - Added animated, stage-aware import progress for EPUB, TXT, and PDF files, including per-chapter EPUB parsing and layout progress.
 
 ### Fixed
+- Jump from full-book search results directly to the prepared target page without replaying intermediate page-turn animations.
 
 - Measure the active Android font and safe reading viewport at runtime, then repaginate local text books without losing the reader's relative position.
 
@@ -52,6 +70,7 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 ## [1.5.4] - 2026-07-19
 
 ### Fixed
+- Jump from full-book search results directly to the prepared target page without replaying intermediate page-turn animations.
 
 - Rebalanced reader page spacing with a tighter top edge and a safer bottom reading margin.
 - Web-captured books now repaginate for the current screen, font size, and line spacing so the last lines remain visible.

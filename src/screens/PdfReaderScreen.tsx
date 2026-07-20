@@ -7,6 +7,7 @@ import {
   } from "expo-keep-awake";
 import { useEffect,
   useMemo,
+  useRef,
   useState } from "react";
 import {
   ActivityIndicator,
@@ -20,6 +21,11 @@ import { WebView } from "react-native-webview";
 
 import { useAppAlert } from "../components/AppDialog";
 import type { Book, ReaderPreferences } from "../types";
+import {
+  setVolumeKeyTurnsEnabled,
+  subscribeToVolumeKeyTurns,
+  supportsVolumeKeyTurns,
+} from "../services/readerControls";
 
 type PdfReaderScreenProps = {
   book: Book;
@@ -33,6 +39,7 @@ export function PdfReaderScreen({
   onBack,
 }: PdfReaderScreenProps) {
   const Alert = useAppAlert();
+  const webRef = useRef<WebView>(null);
   const [base64, setBase64] = useState<string>();
   const [loading, setLoading] = useState(true);
 
@@ -45,6 +52,22 @@ export function PdfReaderScreen({
       void deactivateKeepAwake("modu-pdf-reader");
     };
   }, [preferences.keepScreenAwake]);
+
+  useEffect(() => {
+    const enabled = preferences.volumeKeys && supportsVolumeKeyTurns;
+    if (!enabled) return;
+    setVolumeKeyTurnsEnabled(true);
+    const subscription = subscribeToVolumeKeyTurns((direction) => {
+      const factor = direction === "previous" ? -0.88 : 0.88;
+      webRef.current?.injectJavaScript(
+        `window.scrollBy({ top: window.innerHeight * ${factor}, behavior: "smooth" }); true;`,
+      );
+    });
+    return () => {
+      subscription.remove();
+      setVolumeKeyTurnsEnabled(false);
+    };
+  }, [preferences.volumeKeys]);
 
   useEffect(() => {
     let active = true;
@@ -79,8 +102,11 @@ export function PdfReaderScreen({
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <style>
     html,body{margin:0;background:#282b2a;color:#fff;font-family:system-ui}
-    #viewer{padding:12px 0}
-    canvas{display:block;max-width:96%;height:auto!important;margin:0 auto 14px;background:white;box-shadow:0 3px 18px #0008}
+    #viewer{padding:12px 0 28px}
+    .page-shell{position:relative;width:100%;min-height:240px;margin:0 auto 14px;display:grid;place-items:start center;contain:layout paint style}
+    .page-shell::before{content:attr(data-label);position:absolute;inset:18px 0 auto;text-align:center;color:#8f9792;font-size:12px}
+    .page-shell[data-state="ready"]::before{display:none}
+    canvas{display:block;background:white;box-shadow:0 3px 18px #0008}
     #state{padding:42px 20px;text-align:center;color:#ddd}
   </style>
 </head>
@@ -97,14 +123,76 @@ export function PdfReaderScreen({
       const pdf=await pdfjsLib.getDocument({data}).promise;
       document.getElementById("state").remove();
       const viewer=document.getElementById("viewer");
+      const holders=[];
+      const rendered=new Map();
+      const rendering=new Map();
+      let estimatedHeight=Math.max(window.innerHeight*1.08,window.innerWidth*1.34);
+      let activePage=1;
       for(let n=1;n<=pdf.numPages;n++){
-        const page=await pdf.getPage(n);
-        const viewport=page.getViewport({scale:1.55});
-        const canvas=document.createElement("canvas");
-        canvas.width=viewport.width;canvas.height=viewport.height;
-        viewer.appendChild(canvas);
-        await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
+        const holder=document.createElement("section");
+        holder.className="page-shell";
+        holder.dataset.page=String(n);
+        holder.dataset.label="正在准备第 "+n+" 页";
+        holder.style.height=estimatedHeight+"px";
+        viewer.appendChild(holder);
+        holders.push(holder);
       }
+      const recycleAround=(center)=>{
+        rendered.forEach((canvas,pageNumber)=>{
+          if(Math.abs(pageNumber-center)<=2)return;
+          canvas.remove();
+          rendered.delete(pageNumber);
+          const holder=holders[pageNumber-1];
+          if(holder)holder.dataset.state="idle";
+        });
+      };
+      const renderPage=(pageNumber)=>{
+        if(pageNumber<1||pageNumber>pdf.numPages||rendered.has(pageNumber))return Promise.resolve();
+        const pending=rendering.get(pageNumber);
+        if(pending)return pending;
+        const holder=holders[pageNumber-1];
+        holder.dataset.state="loading";
+        const task=(async()=>{
+          const page=await pdf.getPage(pageNumber);
+          const baseViewport=page.getViewport({scale:1});
+          const cssWidth=window.innerWidth*.96;
+          const cssScale=cssWidth/baseViewport.width;
+          const pixelScale=cssScale*Math.min(window.devicePixelRatio||1,2);
+          const viewport=page.getViewport({scale:pixelScale});
+          const canvas=document.createElement("canvas");
+          canvas.width=Math.ceil(viewport.width);
+          canvas.height=Math.ceil(viewport.height);
+          canvas.style.width=cssWidth+"px";
+          const cssHeight=baseViewport.height*cssScale;
+          canvas.style.height=cssHeight+"px";
+          holder.style.height=cssHeight+"px";
+          if(pageNumber===1){
+            estimatedHeight=cssHeight;
+            holders.forEach((item,index)=>{if(index>0&&!rendered.has(index+1))item.style.height=estimatedHeight+"px";});
+          }
+          holder.replaceChildren(canvas);
+          await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
+          rendered.set(pageNumber,canvas);
+          holder.dataset.state="ready";
+          recycleAround(activePage);
+        })().catch(()=>{holder.dataset.state="error";holder.dataset.label="第 "+pageNumber+" 页暂时无法显示";})
+          .finally(()=>rendering.delete(pageNumber));
+        rendering.set(pageNumber,task);
+        return task;
+      };
+      const warmWindow=(pageNumber)=>{
+        activePage=Math.max(1,Math.min(pdf.numPages,pageNumber));
+        [activePage-1,activePage,activePage+1].forEach((page)=>{void renderPage(page);});
+        recycleAround(activePage);
+      };
+      const observer=new IntersectionObserver((entries)=>{
+        const visible=entries.filter((entry)=>entry.isIntersecting)
+          .sort((a,b)=>Math.abs(a.boundingClientRect.top)-Math.abs(b.boundingClientRect.top));
+        if(!visible.length)return;
+        warmWindow(Number(visible[0].target.dataset.page||1));
+      },{rootMargin:"110% 0px",threshold:.01});
+      holders.forEach((holder)=>observer.observe(holder));
+      warmWindow(1);
     }catch(error){
       document.getElementById("state").textContent="PDF 加载失败，请检查网络或文件内容。";
     }
@@ -135,6 +223,7 @@ export function PdfReaderScreen({
         </View>
       ) : base64 ? (
         <WebView
+          ref={webRef}
           allowFileAccess
           originWhitelist={["*"]}
           source={{ html }}

@@ -39,6 +39,7 @@ export const enSettings: Record<string, string> = {
   "点击屏幕翻页": "Tap to Turn Pages",
   "点击左右区域前后翻页": "Tap the left or right side to turn pages",
   "音量键翻页": "Volume Keys",
+  "音量加键上一页，减键下一页": "Volume up for the previous page, down for the next",
   "需要原生开发版本，Expo Go 中会提示": "Requires a native development build",
   "显示阅读进度": "Show Reading Progress",
   "显示页码与百分比": "Show page number and percentage",

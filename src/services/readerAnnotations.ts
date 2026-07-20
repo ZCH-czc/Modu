@@ -36,9 +36,13 @@ export function migrateAnnotationsForPagination(
   annotations: ReaderAnnotation[],
   bookId: string,
   pages: string[],
+  chapterIndex?: number,
 ) {
   return annotations.map((annotation) => {
-    if (annotation.bookId !== bookId) return annotation;
+    if (
+      annotation.bookId !== bookId ||
+      (chapterIndex !== undefined && annotation.chapterIndex !== chapterIndex)
+    ) return annotation;
     const pageIndex = pages.findIndex((page) => page.includes(annotation.quote));
     if (pageIndex < 0) {
       return {

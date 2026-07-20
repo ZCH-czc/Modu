@@ -13,6 +13,13 @@ import {
   paginateTextForReader,
   type ReaderPaginationLayout,
 } from "./readerPagination";
+import {
+  createLocalChapterCache,
+  deleteLocalChapterCache,
+  loadLocalChapterBook,
+  persistLocalChapterPagination,
+  readLocalChapterManifest,
+} from "./localBookCache";
 import type {
   Book,
   ReaderOrientation,
@@ -238,11 +245,26 @@ export async function saveHiddenSampleBooks(ids: string[]) {
 }
 
 function storageBooks(books: Book[]) {
-  return books.map((book) => {
-    if (book.format !== "epub") return book;
-    const { localChapters: _localChapters, ...stored } = book;
-    return { ...stored, pages: [], pageTitles: [] };
-  });
+  return books.map(unloadImportedTextBook);
+}
+
+export function unloadImportedTextBook(book: Book): Book {
+  if (book.format !== "epub" && book.format !== "txt") return book;
+  const {
+    localChapters: _localChapters,
+    localPageIndex: _localPageIndex,
+    ...stored
+  } = book;
+  const manifestPageCount = book.localChapterManifest?.reduce(
+    (total, chapter) => total + Math.max(1, chapter.pageCount),
+    0,
+  );
+  return {
+    ...stored,
+    pageCount: manifestPageCount || book.pageCount || book.pages.length || 0,
+    pages: [],
+    pageTitles: [],
+  };
 }
 
 async function persistBooks(books: Book[]) {
@@ -258,48 +280,96 @@ export async function loadImportedBooks(): Promise<Book[]> {
   if (!stored) return [];
   try {
     const books = JSON.parse(stored) as Book[];
-    return Promise.all(books.map(hydrateBook));
+    let migrated = false;
+    const prepared = await Promise.all(books.map(async (book) => {
+      if (
+        book.format === "txt" &&
+        !book.contentUri &&
+        book.pages.length > 0
+      ) {
+        const chapters = reconstructTitledChapters(book.pages, book.pageTitles);
+        const cache = await createLocalChapterCache(
+          book.id,
+          chapters.map((chapter) => ({
+            ...chapter,
+            pages: paginate(chapter.text, 720),
+          })),
+        );
+        migrated = true;
+        return {
+          ...book,
+          contentUri: cache.contentUri,
+          localChapterManifest: cache.manifest,
+          pageCount: cache.pageCount,
+        };
+      }
+      return book;
+    }));
+    const compact = prepared.map(unloadImportedTextBook);
+    if (migrated) await persistBooks(compact);
+    return compact;
   } catch {
     return [];
   }
 }
 
-export async function hydrateBook(book: Book): Promise<Book> {
-  if (book.format !== "epub" || !book.contentUri || book.pages.length > 0) {
+export async function hydrateBook(
+  book: Book,
+  requestedChapterIndex?: number,
+  savedPageIndex = 0,
+): Promise<Book> {
+  if (
+    (book.format !== "epub" && book.format !== "txt") ||
+    !book.contentUri ||
+    book.pages.length > 0
+  ) {
     return book;
   }
 
   try {
-    const content = await FileSystem.readAsStringAsync(book.contentUri);
-    const parsed = JSON.parse(content) as {
-      pages: string[];
-      pageTitles: string[];
-      chapters?: Array<{ title: string; text: string }>;
-    };
-    const localChapters = parsed.chapters?.length
-      ? parsed.chapters
-      : reconstructTitledChapters(parsed.pages, parsed.pageTitles);
-    if (!parsed.chapters?.length) {
-      void FileSystem.writeAsStringAsync(
-        book.contentUri,
-        JSON.stringify({ ...parsed, chapters: localChapters }),
+    let prepared = book;
+    let manifest = book.localChapterManifest?.length
+      ? book.localChapterManifest
+      : await readLocalChapterManifest(book.contentUri);
+    if (!manifest?.length) {
+      const legacyContentUri = book.contentUri;
+      const parsed = JSON.parse(await FileSystem.readAsStringAsync(legacyContentUri)) as {
+        pages: string[];
+        pageTitles: string[];
+        chapters?: Array<{ title: string; text: string }>;
+      };
+      const chapters = parsed.chapters?.length
+        ? parsed.chapters
+        : reconstructTitledChapters(parsed.pages, parsed.pageTitles);
+      const cache = await createLocalChapterCache(
+        book.id,
+        chapters.map((chapter) => ({
+          ...chapter,
+          pages: paginate(chapter.text, 720),
+        })),
       );
+      manifest = cache.manifest;
+      prepared = {
+        ...book,
+        contentUri: cache.contentUri,
+        localChapterManifest: manifest,
+        pageCount: cache.pageCount,
+      };
     }
-    return {
-      ...book,
-      pages: parsed.pages,
-      pageTitles: parsed.pageTitles,
-      localChapters,
-    };
+    return await loadLocalChapterBook(
+      { ...prepared, localChapterManifest: manifest },
+      requestedChapterIndex,
+      savedPageIndex,
+    );
   } catch {
     return {
       ...book,
       pages: ["这本书的已解析内容不可用，请从书架删除后重新导入。"],
+      pageCount: 1,
       pageTitles: ["内容不可用"],
     };
   }
 }
-
 export function repaginateImportedTextBook(
   book: Book,
   layout: ReaderPaginationLayout,
@@ -315,13 +385,31 @@ export function repaginateImportedTextBook(
     pages.push(...chapterPages);
     pageTitles.push(...chapterPages.map(() => chapter.title));
   });
-  return book.format === "epub"
-    ? { ...book, pages, pageTitles, localChapters: chapters }
-    : { ...book, pages, pageTitles };
+  if (book.localChapterManifest?.length && book.localChapterIndex !== undefined) {
+    const localChapterManifest = book.localChapterManifest.map((entry, index) =>
+      index === book.localChapterIndex ? { ...entry, pageCount: pages.length } : entry,
+    );
+    return {
+      ...book,
+      pages,
+      pageCount: localChapterManifest.reduce(
+        (total, chapter) => total + Math.max(1, chapter.pageCount),
+        0,
+      ),
+      pageTitles,
+      localChapters: chapters,
+      localChapterManifest,
+    };
+  }
+  return { ...book, pages, pageCount: pages.length, pageTitles, localChapters: chapters };
 }
 
 export async function persistEpubPagination(book: Book) {
-  if (book.format !== "epub" || !book.contentUri) return;
+  if ((book.format !== "epub" && book.format !== "txt") || !book.contentUri) return;
+  if (book.localChapterManifest?.length) {
+    await persistLocalChapterPagination(book);
+    return;
+  }
   await FileSystem.writeAsStringAsync(
     book.contentUri,
     JSON.stringify({
@@ -411,23 +499,35 @@ export async function importBookFromUri(
       await FileSystem.deleteAsync(fileUri, { idempotent: true });
       throw new Error("这个 TXT 文件没有足够的正文内容。");
     }
-    reportImportProgress(onProgress, 0.68, "正在整理文字与分页");
-    const pages = paginate(content, 720);
+    reportImportProgress(onProgress, 0.62, "正在辨认章节");
+    const chapters = splitTextChapters(content);
+    const chapterInputs = chapters.map((chapter) => ({
+      ...chapter,
+      pages: paginate(chapter.text, 720),
+    }));
+    reportImportProgress(onProgress, 0.78, "正在分章保存");
+    const cache = await createLocalChapterCache(id, chapterInputs);
+    const firstChapter = chapterInputs[0];
     reportImportProgress(onProgress, 0.9, "文本已经排好");
     book = {
       id,
       title: normalizedName.replace(/\.txt$/i, ""),
       author: "本地文本",
       category: "TXT",
-      currentChapter: "正文",
+      currentChapter: firstChapter.title,
       lastRead: "刚刚导入",
       coverColors: ["#6A725D", "#30372B"],
       accent: "#A3AD91",
       progress: 0,
-      pages,
-      pageTitles: pages.map(() => "正文"),
+      pages: firstChapter.pages,
+      pageCount: cache.pageCount,
+      pageTitles: firstChapter.pages.map(() => firstChapter.title),
       format: "txt",
+      localChapters: [{ title: firstChapter.title, text: firstChapter.text }],
+      localChapterManifest: cache.manifest,
+      localChapterIndex: 0,
       fileUri,
+      contentUri: cache.contentUri,
       sourceSize,
     };
   } else {
@@ -444,7 +544,8 @@ export async function deleteImportedBook(book: Book, books: Book[]) {
   if (book.fileUri) {
     await FileSystem.deleteAsync(book.fileUri, { idempotent: true });
   }
-  if (book.contentUri) {
+  const deletedChapterDirectory = await deleteLocalChapterCache(book);
+  if (book.contentUri && !deletedChapterDirectory) {
     await FileSystem.deleteAsync(book.contentUri, { idempotent: true });
   }
   const next = books.filter((item) => item.id !== book.id);
@@ -534,8 +635,7 @@ async function parseEpub(
   }
   if (chapters.length === 0) throw new Error("EPUB 中没有可读取的正文。");
 
-  const pages: string[] = [];
-  const pageTitles: string[] = [];
+  const chapterInputs = [] as Array<{ title: string; text: string; pages: string[] }>;
   for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex += 1) {
     const chapter = chapters[chapterIndex];
     reportImportProgress(
@@ -543,40 +643,36 @@ async function parseEpub(
       0.82 + ((chapterIndex + 1) / chapters.length) * 0.1,
       `正在排版章节 ${chapterIndex + 1} / ${chapters.length}`,
     );
-    paginate(chapter.text, 720).forEach((page) => {
-      pages.push(page);
-      pageTitles.push(chapter.title);
-    });
+    chapterInputs.push({ ...chapter, pages: paginate(chapter.text, 720) });
     if ((chapterIndex + 1) % 8 === 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
   }
 
   reportImportProgress(onProgress, 0.94, "正在保存章节缓存");
-  const contentUri = `${FileSystem.documentDirectory}library/${id}.content.json`;
-  await FileSystem.writeAsStringAsync(
-    contentUri,
-    JSON.stringify({ pages, pageTitles, chapters }),
-  );
+  const cache = await createLocalChapterCache(id, chapterInputs);
+  const firstChapter = chapterInputs[0];
 
   return {
     id,
     title,
     author,
     category: "EPUB",
-    currentChapter: pageTitles[0] ?? "开始阅读",
+    currentChapter: firstChapter.title || "开始阅读",
     lastRead: "刚刚导入",
     coverColors: ["#536B5D", "#25372D"],
     accent: "#91A996",
     progress: 0,
-    pages,
-    pageTitles,
+    pages: firstChapter.pages,
+    pageCount: cache.pageCount,
+    pageTitles: firstChapter.pages.map(() => firstChapter.title),
     format: "epub" as const,
-    localChapters: chapters,
+    localChapters: [{ title: firstChapter.title, text: firstChapter.text }],
+    localChapterManifest: cache.manifest,
+    localChapterIndex: 0,
     fileUri,
-    contentUri,
-  };
-}
+    contentUri: cache.contentUri,
+  };}
 
 function htmlToText(html: string) {
   return decodeEntities(
@@ -601,6 +697,47 @@ function decodeEntities(value: string) {
     .replace(/&#39;|&apos;/gi, "'");
 }
 
+function splitTextChapters(text: string): Array<{ title: string; text: string }> {
+  const headingPattern = /^\s*(?:第[〇零一二三四五六七八九十百千万两0-9]{1,12}[章节卷部篇回][^\n]{0,48}|chapter\s+\d+[^\n]{0,48}|#{1,3}\s+[^\n]{1,60})\s*$/i;
+  const lines = text.split(/\r?\n/);
+  const chapters: Array<{ title: string; text: string }> = [];
+  let title = "正文";
+  let body: string[] = [];
+  const flush = () => {
+    const chapterText = body.join("\n").trim();
+    if (chapterText.length > 20) chapters.push({ title, text: chapterText });
+    body = [];
+  };
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (headingPattern.test(trimmed)) {
+      flush();
+      title = trimmed.replace(/^#{1,3}\s+/, "") || `第 ${chapters.length + 1} 章`;
+    }
+    body.push(line);
+  });
+  flush();
+  if (chapters.length > 1) return chapters;
+
+  const paragraphs = text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  const chunks: Array<{ title: string; text: string }> = [];
+  let current: string[] = [];
+  let size = 0;
+  const flushChunk = () => {
+    if (!current.length) return;
+    const index = chunks.length + 1;
+    chunks.push({ title: `正文 · ${index}`, text: current.join("\n\n") });
+    current = [];
+    size = 0;
+  };
+  paragraphs.forEach((paragraph) => {
+    if (current.length && size + paragraph.length > 48000) flushChunk();
+    current.push(paragraph);
+    size += paragraph.length;
+  });
+  flushChunk();
+  return chunks.length ? chunks : [{ title: "正文", text }];
+}
 function paginate(text: string, target: number) {
   const paragraphs = text.split(/\n{2,}/).filter(Boolean);
   const pages: string[] = [];

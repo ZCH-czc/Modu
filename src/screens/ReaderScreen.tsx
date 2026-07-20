@@ -7,6 +7,7 @@ import {
 import { useCallback,
   useEffect,
   useLayoutEffect,
+  memo,
   useMemo,
   useRef,
   useState } from "react";
@@ -16,7 +17,7 @@ import {
   BackHandler,
   Easing,
   FlatList,
-  InteractionManager,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -52,6 +53,11 @@ import {
   createMeasuredReaderPaginationLayout,
   type ReaderPaginationLayout,
 } from "../services/readerPagination";
+import {
+  setVolumeKeyTurnsEnabled,
+  subscribeToVolumeKeyTurns,
+  supportsVolumeKeyTurns,
+} from "../services/readerControls";
 
 type ReaderScreenProps = {
   book: Book;
@@ -65,7 +71,8 @@ type ReaderScreenProps = {
   onToggleBookmark: (pageIndex: number, chapterTitle: string, excerpt: string) => void;
   onPageChange: (pageIndex: number) => void;
   onChapterBoundary?: (direction: -1 | 1) => void;
-  onChapterSelect?: (chapterIndex: number) => void;
+  onChapterSelect?: (chapterIndex: number, pageIndex?: number) => void;
+  onSearchBook?: (query: string) => Promise<ReaderSearchResult[]>;
   canPreviousChapter?: boolean;
   canNextChapter?: boolean;
   onDownloadAll?: () => void;
@@ -79,12 +86,14 @@ type ChapterEntry = {
   title: string;
   pageIndex: number;
   onlineIndex?: number;
+  localIndex?: number;
   url?: string;
 };
 
 type ReaderSearchResult = {
   key: string;
   pageIndex: number;
+  chapterIndex?: number;
   chapterTitle: string;
   excerpt: string;
   matchStart: number;
@@ -182,6 +191,91 @@ const themes: Record<
   },
 };
 
+type ReaderParagraphPageProps = {
+  annotations?: ReaderAnnotation[];
+  fontFamily?: string;
+  fontSize: number;
+  lineHeight: number;
+  onParagraphLayout?: (
+    paragraphIndex: number,
+    quote: string,
+    y: number,
+    height: number,
+  ) => void;
+  pageIndex: number;
+  paragraphSpacing: number;
+  paragraphs: string[];
+  selectable?: boolean;
+  textAlignment: ReaderPreferences["textAlignment"];
+  textColor: string;
+};
+
+const ReaderParagraphPage = memo(function ReaderParagraphPage({
+  annotations = [],
+  fontFamily,
+  fontSize,
+  lineHeight,
+  onParagraphLayout,
+  pageIndex,
+  paragraphSpacing,
+  paragraphs,
+  selectable = false,
+  textAlignment,
+  textColor,
+}: ReaderParagraphPageProps) {
+  const annotationByParagraph = useMemo(() => {
+    const lookup = new Map<number, ReaderAnnotation>();
+    annotations.forEach((annotation) => {
+      if (annotation.pageIndex === pageIndex) {
+        lookup.set(annotation.paragraphIndex, annotation);
+      }
+    });
+    return lookup;
+  }, [annotations, pageIndex]);
+
+  return (
+    <>
+      {paragraphs.map((paragraph, paragraphIndex) => {
+        const annotation = annotationByParagraph.get(paragraphIndex);
+        const matchingAnnotation = annotation?.quote === paragraph ? annotation : undefined;
+        return (
+          <Text
+            key={`${pageIndex}-${paragraphIndex}`}
+            onLayout={onParagraphLayout ? (event) => {
+              onParagraphLayout(
+                paragraphIndex,
+                paragraph,
+                event.nativeEvent.layout.y,
+                event.nativeEvent.layout.height,
+              );
+            } : undefined}
+            selectable={selectable}
+            suppressHighlighting
+            style={[
+              styles.paragraph,
+              {
+                color: textColor,
+                fontFamily,
+                fontSize,
+                lineHeight,
+                marginBottom: paragraphSpacing,
+                textAlign: textAlignment,
+              },
+              matchingAnnotation ? {
+                backgroundColor: annotationColors[matchingAnnotation.color].fill,
+                textDecorationColor: annotationColors[matchingAnnotation.color].stroke,
+                textDecorationLine: "underline" as const,
+              } : undefined,
+            ]}
+          >
+            {paragraph}
+          </Text>
+        );
+      })}
+    </>
+  );
+});
+
 export function ReaderScreen({
   book,
   annotations,
@@ -195,6 +289,7 @@ export function ReaderScreen({
   onPageChange,
   onChapterBoundary,
   onChapterSelect,
+  onSearchBook,
   canPreviousChapter = false,
   canNextChapter = false,
   onDownloadAll,
@@ -206,6 +301,7 @@ export function ReaderScreen({
   const [pageIndex, setPageIndex] = useState(() =>
     Math.max(0, Math.min(initialPage, book.pages.length - 1)),
   );
+  const [pageGestureLocked, setPageGestureLocked] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(
     !preferences.immersiveMode,
   );
@@ -224,8 +320,6 @@ export function ReaderScreen({
   const [completedCalibrationKey, setCompletedCalibrationKey] = useState("");
   const chapterSheetProgress = useRef(new Animated.Value(0)).current;
   const bookmarkScale = useRef(new Animated.Value(1)).current;
-  const pageOpacity = useRef(new Animated.Value(1)).current;
-  const pageTransition = useRef(new Animated.Value(0)).current;
   const dragTranslate = useRef(new Animated.Value(0)).current;
   const pageAnimatingRef = useRef(false);
   const pendingPageResetRef = useRef<number | undefined>(undefined);
@@ -234,7 +328,7 @@ export function ReaderScreen({
   const paragraphLayoutPageKeyRef = useRef("");
   const longPressConsumedRef = useRef(false);
   const pageCacheRef = useRef(new Map<number, string[]>());
-  const pageBookKey = `${book.id}:${book.onlineChapterIndex ?? "local"}:${book.pages.length}:${book.paginationVersion ?? 0}`;
+  const pageBookKey = `${book.id}:${book.localChapterIndex ?? book.onlineChapterIndex ?? "all"}:${book.pages.length}:${book.paginationVersion ?? 0}`;
   const paragraphLayoutPageKey = `${pageBookKey}:${pageIndex}`;
   if (paragraphLayoutPageKeyRef.current !== paragraphLayoutPageKey) {
     paragraphLayoutPageKeyRef.current = paragraphLayoutPageKey;
@@ -307,6 +401,14 @@ export function ReaderScreen({
   );
 
   const chapterEntries = useMemo<ChapterEntry[]>(() => {
+    if (book.localChapterManifest?.length) {
+      return book.localChapterManifest.map((chapter, index) => ({
+        key: chapter.uri,
+        title: chapter.title || `第 ${index + 1} 章`,
+        pageIndex: 0,
+        localIndex: index,
+      }));
+    }
     if (book.onlineChapters?.length) {
       return book.onlineChapters.map((chapter, index) => ({
         key: chapter.url + "-" + index,
@@ -346,9 +448,21 @@ export function ReaderScreen({
       previousTitle = title;
     }
     return entries.length ? entries : [{ key: "body", title: "正文", pageIndex: 0 }];
-  }, [book.format, book.onlineChapters, book.pageTitles, book.pages.length, book.webChapters]);
+  }, [
+    book.format,
+    book.localChapterManifest,
+    book.onlineChapters,
+    book.pageTitles,
+    book.pages.length,
+    book.webChapters,
+  ]);
 
   const currentChapterListIndex = useMemo(() => {
+    if (book.localChapterManifest?.length) {
+      return Math.max(0, chapterEntries.findIndex(
+        (entry) => entry.localIndex === (book.localChapterIndex ?? 0),
+      ));
+    }
     if (book.onlineChapters?.length) {
       return Math.max(0, chapterEntries.findIndex(
         (entry) => entry.onlineIndex === (book.onlineChapterIndex ?? 0),
@@ -359,7 +473,14 @@ export function ReaderScreen({
       if (entry.pageIndex <= pageIndex) current = index;
     });
     return current;
-  }, [book.onlineChapterIndex, book.onlineChapters, chapterEntries, pageIndex]);
+  }, [
+    book.localChapterIndex,
+    book.localChapterManifest,
+    book.onlineChapterIndex,
+    book.onlineChapters,
+    chapterEntries,
+    pageIndex,
+  ]);
 
   const currentOriginalUrl = chapterEntries[currentChapterListIndex]?.url || book.sourceUrl;
   const currentBookmark = bookmarks.find((bookmark) => bookmark.pageIndex === pageIndex);
@@ -422,6 +543,16 @@ export function ReaderScreen({
     });
   }, [chapterSheetProgress]);
 
+  const closeChapterListImmediately = useCallback(() => {
+    Keyboard.dismiss();
+    chapterSheetProgress.stopAnimation();
+    chapterSheetProgress.setValue(0);
+    setChapterVisible(false);
+    setChapterSearchQuery("");
+    setChapterSearchResults([]);
+    setChapterSearching(false);
+  }, [chapterSheetProgress]);
+
   useEffect(() => {
     const query = chapterSearchQuery.trim();
     if (!query) {
@@ -430,7 +561,27 @@ export function ReaderScreen({
       return undefined;
     }
 
-    let cancelled = false;
+        if (onSearchBook) {
+      let cancelled = false;
+      setChapterSearching(true);
+      const searchTimer = setTimeout(() => {
+        void onSearchBook(query)
+          .then((results) => {
+            if (!cancelled) setChapterSearchResults(results);
+          })
+          .catch(() => {
+            if (!cancelled) setChapterSearchResults([]);
+          })
+          .finally(() => {
+            if (!cancelled) setChapterSearching(false);
+          });
+      }, 160);
+      return () => {
+        cancelled = true;
+        clearTimeout(searchTimer);
+      };
+    }
+let cancelled = false;
     let pageCursor = 0;
     let scanTimer: ReturnType<typeof setTimeout> | undefined;
     const results: ReaderSearchResult[] = [];
@@ -474,6 +625,7 @@ export function ReaderScreen({
     book.pageTitles,
     book.pages,
     chapterSearchQuery,
+    onSearchBook,
     resolvedLanguage,
   ]);
 
@@ -523,16 +675,15 @@ export function ReaderScreen({
     paragraphLayoutsRef.current.clear();
     pendingPageResetRef.current = undefined;
     pageAnimatingRef.current = false;
+    setPageGestureLocked(false);
     dragTranslate.setValue(0);
-    pageTransition.setValue(0);
-    pageOpacity.setValue(1);
     pageRuntimeRef.current = {
       bookKey: pageBookKey,
       currentIndex: nextPage,
       phase: "ready",
     };
     setPageIndex(nextPage);
-  }, [book.pages.length, dragTranslate, initialPage, pageBookKey, pageOpacity, pageTransition]);
+  }, [book.pages.length, dragTranslate, initialPage, pageBookKey]);
 
   const getPageParagraphs = useCallback(
     (index: number) => {
@@ -558,19 +709,24 @@ export function ReaderScreen({
     () => getPageParagraphs(pageIndex + 1),
     [getPageParagraphs, pageIndex],
   );
+  const readerFontFamily = getReaderFontFamily(preferences.fontFamily);
+  const readerLineHeight = preferences.fontSize * preferences.lineHeight;
+  const handleParagraphLayout = useCallback((
+    paragraphIndex: number,
+    quote: string,
+    y: number,
+    height: number,
+  ) => {
+    paragraphLayoutsRef.current.set(paragraphIndex, { y, height, quote });
+  }, []);
 
   useEffect(() => {
     for (const cachedIndex of pageCacheRef.current.keys()) {
-      if (Math.abs(cachedIndex - pageIndex) > 6) {
+      if (Math.abs(cachedIndex - pageIndex) > 2) {
         pageCacheRef.current.delete(cachedIndex);
       }
     }
-    const task = InteractionManager.runAfterInteractions(() => {
-      getPageParagraphs(pageIndex - 2);
-      getPageParagraphs(pageIndex + 2);
-    });
-    return () => task.cancel();
-  }, [getPageParagraphs, pageIndex]);
+  }, [pageIndex]);
   const finishPageChange = useCallback(
     (next: number) => {
       pageRuntimeRef.current = {
@@ -585,22 +741,47 @@ export function ReaderScreen({
     [onPageChange, pageBookKey],
   );
 
+  const jumpToPageImmediately = useCallback(
+    (requestedPage: number) => {
+      const nextPage = Math.max(0, Math.min(requestedPage, book.pages.length - 1));
+      dragTranslate.stopAnimation();
+      dragTranslate.setValue(0);
+      pendingPageResetRef.current = undefined;
+      pageAnimatingRef.current = false;
+      setPageGestureLocked(false);
+      pageRuntimeRef.current = {
+        bookKey: pageBookKey,
+        currentIndex: nextPage,
+        phase: "ready",
+      };
+      setPageIndex(nextPage);
+      onPageChange(nextPage);
+    },
+    [book.pages.length, dragTranslate, onPageChange, pageBookKey],
+  );
+
   useLayoutEffect(() => {
     if (pendingPageResetRef.current !== pageIndex) return;
     dragTranslate.setValue(0);
-    pageTransition.setValue(0);
-    pageOpacity.setValue(1);
     pendingPageResetRef.current = undefined;
     pageAnimatingRef.current = false;
+    setPageGestureLocked(false);
     pageRuntimeRef.current = {
       bookKey: pageBookKey,
       currentIndex: pageIndex,
       phase: "ready",
     };
-  }, [dragTranslate, pageBookKey, pageIndex, pageOpacity, pageTransition]);
+  }, [dragTranslate, pageBookKey, pageIndex]);
   const selectChapter = useCallback(
     (entry: ChapterEntry) => {
       closeChapterList();
+      if (
+        entry.localIndex !== undefined &&
+        entry.localIndex !== (book.localChapterIndex ?? 0)
+      ) {
+        onChapterSelect?.(entry.localIndex, entry.pageIndex);
+        return;
+      }
       if (
         entry.onlineIndex !== undefined &&
         entry.onlineIndex !== (book.onlineChapterIndex ?? 0)
@@ -608,10 +789,13 @@ export function ReaderScreen({
         onChapterSelect?.(entry.onlineIndex);
         return;
       }
-      const targetPage = entry.onlineIndex !== undefined ? 0 : entry.pageIndex;
+      const targetPage = entry.onlineIndex !== undefined || entry.localIndex !== undefined
+        ? 0
+        : entry.pageIndex;
       if (targetPage === pageIndex) return;
       const direction = targetPage > pageIndex ? 1 : -1;
       pageAnimatingRef.current = true;
+      setPageGestureLocked(true);
       pageRuntimeRef.current = {
         bookKey: pageBookKey,
         currentIndex: pageIndex,
@@ -628,6 +812,7 @@ export function ReaderScreen({
         if (finished) finishPageChange(targetPage);
         else {
           pageAnimatingRef.current = false;
+          setPageGestureLocked(false);
           pageRuntimeRef.current = {
             bookKey: pageBookKey,
             currentIndex: pageIndex,
@@ -636,39 +821,60 @@ export function ReaderScreen({
         }
       });
     },
-    [book.onlineChapterIndex, closeChapterList, dragTranslate, finishPageChange, onChapterSelect, pageBookKey, pageIndex, screenWidth],
+    [
+      book.localChapterIndex,
+      book.onlineChapterIndex,
+      closeChapterList,
+      dragTranslate,
+      finishPageChange,
+      onChapterSelect,
+      pageBookKey,
+      pageIndex,
+      screenWidth,
+    ],
+  );
+
+  const selectSearchResult = useCallback(
+    (result: ReaderSearchResult) => {
+      closeChapterListImmediately();
+      if (
+        result.chapterIndex !== undefined &&
+        result.chapterIndex !== (book.localChapterIndex ?? 0)
+      ) {
+        const targetChapter = result.chapterIndex;
+        requestAnimationFrame(() => {
+          onChapterSelect?.(targetChapter, result.pageIndex);
+        });
+        return;
+      }
+      jumpToPageImmediately(result.pageIndex);
+    },
+    [
+      book.localChapterIndex,
+      closeChapterListImmediately,
+      jumpToPageImmediately,
+      onChapterSelect,
+    ],
   );
 
   const resetPagePosition = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(dragTranslate, {
-        toValue: 0,
-        duration: 150,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(pageTransition, {
-        toValue: 0,
-        duration: 150,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(pageOpacity, {
-        toValue: 1,
-        duration: 130,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
+    pageAnimatingRef.current = true;
+    setPageGestureLocked(true);
+    Animated.timing(dragTranslate, {
+      toValue: 0,
+      duration: 150,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
       pageAnimatingRef.current = false;
+      setPageGestureLocked(false);
       pageRuntimeRef.current = {
         bookKey: pageBookKey,
         currentIndex: pageIndex,
         phase: "ready",
       };
     });
-  }, [dragTranslate, pageBookKey, pageIndex, pageOpacity, pageTransition]);
-
+  }, [dragTranslate, pageBookKey, pageIndex]);
   const changePage = useCallback(
     (direction: -1 | 1) => {
       if (pageAnimatingRef.current) return;
@@ -688,6 +894,7 @@ export function ReaderScreen({
       }
 
       pageAnimatingRef.current = true;
+      setPageGestureLocked(true);
       pageRuntimeRef.current = {
         bookKey: pageBookKey,
         currentIndex: pageIndex,
@@ -695,10 +902,6 @@ export function ReaderScreen({
         targetIndex: next,
       };
       dragTranslate.stopAnimation();
-      pageTransition.stopAnimation();
-      pageOpacity.stopAnimation();
-      pageTransition.setValue(0);
-      pageOpacity.setValue(1);
       dragTranslate.setValue(0);
       Animated.timing(dragTranslate, {
         duration: preferences.pageTurn === "cover" ? 270 : 245,
@@ -709,6 +912,7 @@ export function ReaderScreen({
         if (finished) finishPageChange(next);
         else {
           pageAnimatingRef.current = false;
+          setPageGestureLocked(false);
           pageRuntimeRef.current = {
             bookKey: pageBookKey,
             currentIndex: pageIndex,
@@ -725,13 +929,25 @@ export function ReaderScreen({
       finishPageChange,
       onChapterBoundary,
       pageIndex,
-      pageOpacity,
-      pageTransition,
       preferences.pageTurn,
       resetPagePosition,
       screenWidth,
     ],
   );
+  const volumePageChangeRef = useRef(changePage);
+  volumePageChangeRef.current = changePage;
+  useEffect(() => {
+    const enabled = preferences.volumeKeys && supportsVolumeKeyTurns;
+    setVolumeKeyTurnsEnabled(enabled);
+    if (!enabled) return () => setVolumeKeyTurnsEnabled(false);
+    const subscription = subscribeToVolumeKeyTurns((direction) => {
+      volumePageChangeRef.current(direction === "previous" ? -1 : 1);
+    });
+    return () => {
+      subscription.remove();
+      setVolumeKeyTurnsEnabled(false);
+    };
+  }, [preferences.volumeKeys]);
   const progress =
     book.pages.length > 0 ? ((pageIndex + 1) / book.pages.length) * 100 : 0;
 
@@ -763,15 +979,25 @@ export function ReaderScreen({
     }),
     [dragTranslate, screenWidth],
   );
-
-  const dragOpacity = useMemo(
-    () =>
-      dragVisual.interpolate({
-        inputRange: [-screenWidth, 0, screenWidth],
-        outputRange: [1, 1, 1],
-        extrapolate: "clamp",
-      }),
-    [dragVisual, screenWidth],
+  const previousPageTranslate = useMemo(
+    () => dragTranslate.interpolate({
+      inputRange: [-screenWidth, 0, screenWidth],
+      outputRange: preferences.pageTurn === "slide"
+        ? [-screenWidth, -screenWidth, 0]
+        : [0, 0, 0],
+      extrapolate: "clamp",
+    }),
+    [dragTranslate, preferences.pageTurn, screenWidth],
+  );
+  const nextPageTranslate = useMemo(
+    () => dragTranslate.interpolate({
+      inputRange: [-screenWidth, 0, screenWidth],
+      outputRange: preferences.pageTurn === "slide"
+        ? [0, screenWidth, screenWidth]
+        : [0, 0, 0],
+      extrapolate: "clamp",
+    }),
+    [dragTranslate, preferences.pageTurn, screenWidth],
   );
 
   const onGestureEvent = useMemo(
@@ -807,6 +1033,7 @@ export function ReaderScreen({
 
       if (canTurn && committed) {
         pageAnimatingRef.current = true;
+        setPageGestureLocked(true);
         const next = pageIndex + direction;
         pageRuntimeRef.current = {
           bookKey: pageBookKey,
@@ -816,7 +1043,6 @@ export function ReaderScreen({
         };
         const remaining = 1 - Math.min(Math.abs(translationX) / screenWidth, 1);
         const duration = Math.max(110, Math.min(230, Math.round(remaining * 220)));
-        pageOpacity.setValue(1);
         Animated.timing(dragTranslate, {
           duration,
           easing: Easing.bezier(0.22, 1, 0.36, 1),
@@ -825,13 +1051,14 @@ export function ReaderScreen({
         }).start(({ finished }) => {
           if (finished) finishPageChange(next);
           else {
-          pageAnimatingRef.current = false;
-          pageRuntimeRef.current = {
-            bookKey: pageBookKey,
-            currentIndex: pageIndex,
-            phase: "ready",
-          };
-        }
+            pageAnimatingRef.current = false;
+            setPageGestureLocked(false);
+            pageRuntimeRef.current = {
+              bookKey: pageBookKey,
+              currentIndex: pageIndex,
+              phase: "ready",
+            };
+          }
         });
         return;
       }
@@ -845,22 +1072,14 @@ export function ReaderScreen({
       dragTranslate,
       finishPageChange,
       pageIndex,
-      pageOpacity,
       onChapterBoundary,
       resetPagePosition,
       screenWidth,
     ],
   );
 
-  const pageTranslate = useMemo(
-    () => Animated.add(pageTransition, dragVisual),
-    [dragVisual, pageTransition],
-  );
-  const combinedPageOpacity = useMemo(
-    () => Animated.multiply(pageOpacity, dragOpacity),
-    [dragOpacity, pageOpacity],
-  );
-const openAnnotationEditor = useCallback((
+  const pageTranslate = dragVisual;
+  const openAnnotationEditor = useCallback((
     paragraphIndex: number,
     quote: string,
     existing?: ReaderAnnotation,
@@ -874,7 +1093,7 @@ const openAnnotationEditor = useCallback((
     });
   }, []);
 
-const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
+  const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
     const touchY = event.nativeEvent.locationY;
     const match = [...paragraphLayoutsRef.current.entries()].find(([, layout]) =>
       touchY >= layout.y && touchY <= layout.y + layout.height
@@ -908,7 +1127,7 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
         `${book.id}:note:${now}:${Math.random().toString(36).slice(2, 7)}`,
       bookId: book.id,
       pageIndex,
-      chapterIndex: book.onlineChapterIndex,
+      chapterIndex: book.localChapterIndex ?? book.onlineChapterIndex,
       paragraphIndex: annotationDraft.paragraphIndex,
       chapterTitle,
       quote: annotationDraft.quote,
@@ -920,46 +1139,7 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
     setAnnotationDraft(undefined);
   }, [annotationDraft, book, onSaveAnnotation, pageIndex]);
 
-  const renderParagraphNodes = (items: string[], index: number, selectable = false) =>
-    items.map((paragraph, paragraphIndex) => (
-      <Text
-        key={`${index}-${paragraphIndex}`}
-        onLayout={selectable ? (event) => {
-          paragraphLayoutsRef.current.set(paragraphIndex, {
-            y: event.nativeEvent.layout.y,
-            height: event.nativeEvent.layout.height,
-            quote: paragraph,
-          });
-        } : undefined}
-        selectable={selectable}
-        suppressHighlighting
-        style={[
-          styles.paragraph,
-          {
-            color: palette.text,
-            fontFamily: getReaderFontFamily(preferences.fontFamily),
-            fontSize: preferences.fontSize,
-            lineHeight: preferences.fontSize * preferences.lineHeight,
-            marginBottom: preferences.paragraphSpacing,
-            textAlign: preferences.textAlignment,
-          },
-          (() => {
-            const annotation = annotations.find((item) =>
-              item.pageIndex === index &&
-              item.paragraphIndex === paragraphIndex &&
-              item.quote === paragraph
-            );
-            return annotation ? {
-              backgroundColor: annotationColors[annotation.color].fill,
-              textDecorationColor: annotationColors[annotation.color].stroke,
-              textDecorationLine: "underline" as const,
-            } : undefined;
-          })(),
-        ]}
-      >
-        {paragraph}
-      </Text>
-    ));
+
 
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={[styles.safeArea, { backgroundColor: palette.background }]}>
@@ -1064,6 +1244,7 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
 
         <PanGestureHandler
           activeOffsetX={[-10, 10]}
+          enabled={!pageGestureLocked}
           failOffsetY={[-12, 12]}
           hitSlop={{ left: -28 }}
           onGestureEvent={onGestureEvent}
@@ -1110,12 +1291,22 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
                   left: (screenWidth - readingColumnWidth) / 2,
                   paddingHorizontal: preferences.horizontalPadding,
                   width: readingColumnWidth,
-                  opacity: previousPageOpacity,
                   backgroundColor: palette.background,
+                  transform: [{ translateX: previousPageTranslate }],
                 },
+                preferences.pageTurn === "cover" ? { opacity: previousPageOpacity } : undefined,
               ]}
             >
-              {renderParagraphNodes(previousParagraphs, pageIndex - 1)}
+              <ReaderParagraphPage
+                fontFamily={readerFontFamily}
+                fontSize={preferences.fontSize}
+                lineHeight={readerLineHeight}
+                pageIndex={pageIndex - 1}
+                paragraphSpacing={preferences.paragraphSpacing}
+                paragraphs={previousParagraphs}
+                textAlignment={preferences.textAlignment}
+                textColor={palette.text}
+              />
             </Animated.View>
           ) : null}
 
@@ -1129,12 +1320,22 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
                   left: (screenWidth - readingColumnWidth) / 2,
                   paddingHorizontal: preferences.horizontalPadding,
                   width: readingColumnWidth,
-                  opacity: nextPageOpacity,
                   backgroundColor: palette.background,
+                  transform: [{ translateX: nextPageTranslate }],
                 },
+                preferences.pageTurn === "cover" ? { opacity: nextPageOpacity } : undefined,
               ]}
             >
-              {renderParagraphNodes(nextParagraphs, pageIndex + 1)}
+              <ReaderParagraphPage
+                fontFamily={readerFontFamily}
+                fontSize={preferences.fontSize}
+                lineHeight={readerLineHeight}
+                pageIndex={pageIndex + 1}
+                paragraphSpacing={preferences.paragraphSpacing}
+                paragraphs={nextParagraphs}
+                textAlignment={preferences.textAlignment}
+                textColor={palette.text}
+              />
             </Animated.View>
           ) : null}
 
@@ -1143,18 +1344,30 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
               styles.pageContent,
               { paddingHorizontal: preferences.horizontalPadding },
             ]}
+            scrollEnabled={false}
             showsVerticalScrollIndicator={false}
             style={[
               styles.readingColumn,
               {
-                opacity: combinedPageOpacity,
                 backgroundColor: palette.background,
                 width: readingColumnWidth,
                 transform: [{ translateX: pageTranslate }],
               },
             ]}
           >
-            {renderParagraphNodes(paragraphs, pageIndex, true)}
+            <ReaderParagraphPage
+              annotations={annotations}
+              fontFamily={readerFontFamily}
+              fontSize={preferences.fontSize}
+              lineHeight={readerLineHeight}
+              onParagraphLayout={handleParagraphLayout}
+              pageIndex={pageIndex}
+              paragraphSpacing={preferences.paragraphSpacing}
+              paragraphs={paragraphs}
+              selectable
+              textAlignment={preferences.textAlignment}
+              textColor={palette.text}
+            />
 
           </Animated.ScrollView>
 
@@ -1398,11 +1611,7 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
                           : "";
                         return (
                           <Pressable
-                            onPress={() => selectChapter({
-                              key: item.key,
-                              pageIndex: item.pageIndex,
-                              title: item.chapterTitle,
-                            })}
+                            onPress={() => selectSearchResult(item)}
                             style={({ pressed }) => [
                               styles.readerSearchResult,
                               pressed && { backgroundColor: `${palette.accent}12` },
