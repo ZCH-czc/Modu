@@ -435,10 +435,18 @@ export async function loadChapterList(
     visited.add(url);
     const html = await requestText(url, sourceHeaders(source.config, url));
     const root = parse(html);
-    for (const node of selectNodes(root, safeStaticSelector(rules.chapterList) || rules.chapterList)) {
+    const matchedNodes = selectNodes(root, safeStaticSelector(rules.chapterList) || rules.chapterList);
+    for (const node of matchedNodes) {
       const name = extract(node, rules.chapterName);
       const chapterUrl = resolveOptionalUrl(extract(node, rules.chapterUrl), url);
       if (name && chapterUrl) raw.push({ name, url: chapterUrl });
+    }
+    if (!matchedNodes.length) {
+      raw.push(...discoverConservativeChapterLinks(root, url));
+      const discoveredToc = discoverTableOfContentsUrl(root, url);
+      if (discoveredToc && !visited.has(discoveredToc) && !queue.includes(discoveredToc)) {
+        queue.push(discoveredToc);
+      }
     }
     const next = resolveOptionalUrl(extract(root, rules.nextTocUrl), url);
     if (next && !visited.has(next) && !queue.includes(next)) queue.push(next);
@@ -448,6 +456,27 @@ export async function loadChapterList(
   return [...unique.values()];
 }
 
+function discoverTableOfContentsUrl(root: HTMLElement, baseUrl: string) {
+  const labels = /^(?:目录|章节目录|全部章节|章节列表|返回目录|更多章节|contents?|catalog)$/i;
+  for (const link of root.querySelectorAll("a")) {
+    const label = normalizeText(link.textContent).replace(/\s+/g, "");
+    if (!labels.test(label)) continue;
+    const resolved = resolveOptionalUrl(link.getAttribute("href") || "", baseUrl);
+    if (resolved && resolved !== baseUrl) return resolved;
+  }
+  return undefined;
+}
+
+function discoverConservativeChapterLinks(root: HTMLElement, baseUrl: string) {
+  const candidates = root.querySelectorAll("a").flatMap((link) => {
+    const name = normalizeText(link.textContent);
+    const href = resolveOptionalUrl(link.getAttribute("href") || "", baseUrl);
+    if (!href || !/^(?:第.{0,18}[章节回卷集部篇]|chapter\s*[\divxlcdm]+)/i.test(name)) return [];
+    return [{ name, url: href } satisfies OnlineChapter];
+  });
+  if (candidates.length < 3) return [];
+  return [...new Map(candidates.map((chapter) => [chapter.url, chapter])).values()];
+}
 async function loadSoNovelChapterList(
   rule: SoNovelSourceRule,
   bookUrl: string,
@@ -965,26 +994,67 @@ async function requestText(
   headers: Record<string, string>,
   request: { body?: string; method?: string } = {},
 ) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
   const requestUrl = secureRequestUrl(url);
-  const browserRequest: BookSourceBrowserRequest = { url: requestUrl, headers, body: request.body, method: request.method ?? "GET" };
-  try {
-    const response = await fetch(requestUrl, { body: request.body, headers, method: request.method ?? "GET", signal: controller.signal });
-    const text = await response.text();
-    if (looksLikeBrowserChallenge(response.status, text)) {
-      if (bookSourceBrowserRequestHandler) return await bookSourceBrowserRequestHandler(browserRequest);
-      throw new Error("这个书源需要完成一次网页验证，请在应用中重试。");
+  const browserRequest: BookSourceBrowserRequest = {
+    url: requestUrl,
+    headers,
+    body: request.body,
+    method: request.method ?? "GET",
+  };
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    try {
+      const response = await fetch(requestUrl, {
+        body: request.body,
+        headers,
+        method: request.method ?? "GET",
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      if (looksLikeBrowserChallenge(response.status, text)) {
+        if (bookSourceBrowserRequestHandler) return await bookSourceBrowserRequestHandler(browserRequest);
+        throw new Error("这个书源需要完成一次网页验证，请在应用中重试。");
+      }
+      if ([502, 504].includes(response.status) && attempt === 0) {
+        await waitForSourceRetry();
+        continue;
+      }
+      if (!response.ok) throw new Error("这个书源暂时不可用（状态 " + response.status + "）。");
+      return text;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : "";
+      if (error instanceof Error && error.name === "AbortError") {
+        if (attempt === 0) {
+          await waitForSourceRetry();
+          continue;
+        }
+        throw new Error("书源响应超时，请检查网络后重试。");
+      }
+      if (/CLEARTEXT|UnknownServiceException/i.test(message)) {
+        throw new Error("这个书源仍在使用不安全的旧地址，请更新书源后重试。");
+      }
+      if (/fetch failed|Network request failed|java\.net\.|Failed to connect|socket|connection.*closed/i.test(message)) {
+        if (attempt === 0) {
+          await waitForSourceRetry();
+          continue;
+        }
+        if (bookSourceBrowserRequestHandler) return await bookSourceBrowserRequestHandler(browserRequest);
+        throw new Error("无法连接到这个书源，请检查网络或切换其他书源。");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    if (!response.ok) throw new Error("这个书源暂时不可用（状态 " + response.status + "）。");
-    return text;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("书源响应超时，请检查网络后重试。");
-    const message = error instanceof Error ? error.message : "";
-    if (/CLEARTEXT|UnknownServiceException/i.test(message)) throw new Error("这个书源仍在使用不安全的旧地址，请更新书源后重试。");
-    if (/fetch failed|Network request failed|java\.net\.|Failed to connect/i.test(message)) throw new Error("无法连接到这个书源，请检查网络或切换其他书源。");
-    throw error;
-  } finally { clearTimeout(timer); }
+  }
+  throw lastError instanceof Error ? lastError : new Error("书源请求失败，请稍后重试。");
+}
+
+function waitForSourceRetry() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 320));
 }
 
 function selectNodes(root: HTMLElement, rule: string): HTMLElement[] {

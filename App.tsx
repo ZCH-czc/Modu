@@ -1416,22 +1416,29 @@ function AppContent() {
           }
         />
 
-        <View style={styles.baseLayer}>
+        <View
+          accessibilityElementsHidden={Boolean(currentBook) || webReaderVisible}
+          importantForAccessibility={currentBook || webReaderVisible ? "no-hide-descendants" : "auto"}
+          pointerEvents={currentBook || webReaderVisible ? "none" : "auto"}
+          style={styles.baseLayer}
+        >
           <SafeAreaView
+            accessibilityElementsHidden={Boolean(currentBook) || webReaderVisible}
+            importantForAccessibility={currentBook || webReaderVisible ? "no-hide-descendants" : "auto"}
             edges={["top", "right", "bottom", "left"]}
-            pointerEvents={webReaderVisible ? "none" : "auto"}
+            pointerEvents={currentBook || webReaderVisible ? "none" : "auto"}
             style={styles.app}
           >
             <View style={styles.content}>
               <Reanimated.View
+                accessibilityElementsHidden={tab !== "shelf"}
+                importantForAccessibility={tab === "shelf" ? "auto" : "no-hide-descendants"}
                 renderToHardwareTextureAndroid
                 pointerEvents={tab === "shelf" ? "auto" : "none"}
                 style={[styles.tabPage, shelfPageStyle]}
               >
                 <MemoHomeShelf
                   books={books}
-                  readingGoalMinutes={readingGoalMinutes}
-                  readingStats={readingStats}
                   importedCount={importedBooks.length}
                   onBrowseWeb={openWebReader}
                   onImport={stableHandleImport}
@@ -1445,6 +1452,8 @@ function AppContent() {
               </Reanimated.View>
 
               <Reanimated.View
+                accessibilityElementsHidden={tab !== "settings"}
+                importantForAccessibility={tab === "settings" ? "auto" : "no-hide-descendants"}
                 renderToHardwareTextureAndroid
                 pointerEvents={tab === "settings" ? "auto" : "none"}
                 style={[styles.tabPage, settingsPageStyle]}
@@ -1582,7 +1591,7 @@ function AppContent() {
                     ? (pendingProgress.current[currentBook.id]?.pageIndex ?? 0)
                     : (progress[currentBook.id]?.pageIndex ?? 0)
                 }
-                key={`${currentBook.id}-${currentBook.onlineChapterIndex ?? "local"}-${currentBook.paginationVersion ?? 0}`}
+                key={`${currentBook.id}-${currentBook.paginationVersion ?? 0}`}
                 onBack={closeReader}
                 onDeleteAnnotation={handleDeleteAnnotation}
                 onSaveAnnotation={handleSaveAnnotation}

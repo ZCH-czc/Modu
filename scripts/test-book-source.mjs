@@ -18,14 +18,30 @@ const timer = (label) => {
   return () => ({ label, ms: Math.round(performance.now() - started) });
 };
 const fetchText = async (url) => {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/json",
-      "User-Agent": "Mozilla/5.0 (Android 16; Mobile) ModuReaderSourceTest/1.0",
-    },
-  });
-  const text = await response.text();
-  return { response, text };
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/json",
+          "User-Agent": "Mozilla/5.0 (Android 16; Mobile) ModuReaderSourceTest/1.0",
+        },
+      });
+      const text = await response.text();
+      if ([502, 504].includes(response.status) && attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 320));
+        continue;
+      }
+      return { response, text };
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 320));
+        continue;
+      }
+    }
+  }
+  throw lastError;
 };
 const resolveUrl = (value, base) => new URL(value, base).toString();
 const normalizeText = (value) => value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
@@ -75,7 +91,11 @@ function extract(root, rule, preserveHtml = false) {
 }
 
 const importDone = timer("import");
-const imported = await fetchText(sourceUrl);
+const normalizedSourceUrl = sourceUrl.replace(
+  /^https?:\/\/shuyuan\.yiove\.com\/book-source\/([0-9a-f-]{36})(?:[/?#]|$)/i,
+  "https://shuyuan-api.yiove.com/import/book-source/$1",
+);
+const imported = await fetchText(normalizedSourceUrl);
 if (!imported.response.ok) throw new Error("书源导入 HTTP " + imported.response.status);
 const payload = JSON.parse(imported.text.replace(/^\uFEFF/, ""));
 const config = Array.isArray(payload) ? payload[0] : payload?.data ?? payload;

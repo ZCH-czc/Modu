@@ -124,6 +124,28 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
   const readerColumnWidth=Math.min(screenWidth-38,720);
   const readerPageLimit=Math.max(150,Math.floor((readerColumnWidth/readerFontSize)*(Math.max(screenHeight-insets.top-insets.bottom-250,260)/(readerFontSize*1.82))*.76));
   const readerPages=useMemo(()=>paginateReaderContent(preview?.content??"",readerPageLimit),[preview?.content,readerPageLimit]);
+  const previousReaderPage=useMemo(()=>{
+    if(!preview)return undefined;
+    if(readerPageIndex>0)return {chapter:preview,pages:readerPages,pageIndex:readerPageIndex-1};
+    const chapter=readerHistory[readerIndex-1];
+    if(!chapter)return undefined;
+    const pages=paginateReaderContent(chapter.content,readerPageLimit);
+    return {chapter,pages,pageIndex:Math.max(pages.length-1,0)};
+  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerPageLimit]);
+  const nextReaderPage=useMemo(()=>{
+    if(!preview)return undefined;
+    if(readerPageIndex<readerPages.length-1)return {chapter:preview,pages:readerPages,pageIndex:readerPageIndex+1};
+    const chapter=readerHistory[readerIndex+1];
+    if(!chapter)return undefined;
+    const pages=paginateReaderContent(chapter.content,readerPageLimit);
+    return {chapter,pages,pageIndex:0};
+  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerPageLimit]);
+  const previousReaderPageOpacity=readerPageDrag.interpolate({
+    inputRange:[-1,0,screenWidth],outputRange:[0,0,1],extrapolate:"clamp",
+  });
+  const nextReaderPageOpacity=readerPageDrag.interpolate({
+    inputRange:[-screenWidth,0,1],outputRange:[1,0,0],extrapolate:"clamp",
+  });
 
   const source = useMemo(() => (url ? { uri: url } : { html: START_HTML }), [url]);
   const suggestions = useMemo(() => {
@@ -484,7 +506,6 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
       useNativeDriver:true,
     }).start(({finished})=>{
       if(!finished){readerPageAnimatingRef.current=false;return;}
-      readerPageDrag.setValue(direction*screenWidth*.12);
       if(direction<0){
         if(readerPageIndex>0)setReaderPageIndex((page)=>page-1);
         else openReaderChapter(readerIndex-1,"end");
@@ -493,7 +514,10 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
       }else{
         openNextReaderChapter();
       }
-      requestAnimationFrame(()=>settleReaderPage());
+      requestAnimationFrame(()=>{
+        readerPageDrag.setValue(0);
+        readerPageAnimatingRef.current=false;
+      });
     });
   };
   const onReaderPageGesture=useMemo(
@@ -827,7 +851,33 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                 onGestureEvent={onReaderPageGesture}
                 onHandlerStateChange={onReaderPageGestureStateChange}
               >
-                <RNAnimated.View style={[styles.readerPaged,{paddingBottom:88+insets.bottom,transform:[{translateX:readerPageDrag}]}]}>
+                <RNAnimated.View style={[styles.readerPaged,{paddingBottom:88+insets.bottom}]}>
+                  {[
+                    {key:"previous",snapshot:previousReaderPage,opacity:previousReaderPageOpacity},
+                    {key:"next",snapshot:nextReaderPage,opacity:nextReaderPageOpacity},
+                  ].map(({key,snapshot,opacity})=>snapshot ? (
+                    <RNAnimated.View key={key} pointerEvents="none" style={[styles.readerAdjacentPage,{opacity}]}>
+                      <View style={[styles.readerPagedBody,{width:readerColumnWidth}]}>
+                        {snapshot.pageIndex===0 ? (
+                          <>
+                            <Text style={[styles.readerEyebrow,{color:readerPalette.accent}]}>WEB READER</Text>
+                            <Text style={[styles.readerTitle,{color:readerPalette.text,fontFamily:readerFontFamily}]}>{snapshot.chapter.title}</Text>
+                            <Text style={[styles.readerMeta,{color:readerPalette.muted}]}>{t("{source} · 第 {chapter} 章", { source: snapshot.chapter.author || t("摘自当前网页"), chapter: readerHistory.indexOf(snapshot.chapter) + 1 })}</Text>
+                            <View style={[styles.readerRule,{backgroundColor:`${readerPalette.muted}35`}]}/>
+                          </>
+                        ) : (
+                          <Text numberOfLines={1} style={[styles.readerPagedChapter,{color:readerPalette.muted,fontFamily:readerFontFamily}]}>{snapshot.chapter.title}</Text>
+                        )}
+                        {(snapshot.pages[snapshot.pageIndex]??"").split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean).map((paragraph,index)=>(
+                          <Text key={snapshot.chapter.url+"-adjacent-"+snapshot.pageIndex+"-"+index} style={[styles.readerParagraph,{color:readerPalette.text,fontFamily:readerFontFamily,fontSize:readerFontSize,lineHeight:readerFontSize*1.82}]}>
+                            {paragraph}
+                          </Text>
+                        ))}
+                        <Text style={[styles.readerPageNumber,{color:readerPalette.muted}]}>{snapshot.pageIndex+1} / {snapshot.pages.length}</Text>
+                      </View>
+                    </RNAnimated.View>
+                  ) : null)}
+                  <RNAnimated.View style={[styles.readerPagedCurrent,{transform:[{translateX:readerPageDrag}]}]}>
                   <View style={[styles.readerPagedBody,{width:readerColumnWidth}]}>
                     {readerPageIndex===0 ? (
                       <>
@@ -846,6 +896,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, initialExtract
                     ))}
                     <Text style={[styles.readerPageNumber,{color:readerPalette.muted}]}>{readerPageIndex+1} / {readerPages.length}</Text>
                   </View>
+                  </RNAnimated.View>
                   <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
                     <Pressable accessibilityLabel="网页阅读上一页" disabled={!canTurnReaderPrevious} onPress={()=>turnReaderPage(-1)} style={styles.readerLeftTap}/>
                     <Pressable accessibilityLabel="网页阅读下一页" disabled={!canTurnReaderNext} onPress={()=>turnReaderPage(1)} style={styles.readerRightTap}/>
@@ -1133,6 +1184,8 @@ const styles = StyleSheet.create({
   readerContent:{paddingTop:24,paddingBottom:118},
   readerPaged:{flex:1,overflow:"hidden",paddingTop:22},
   readerPagedBody:{alignSelf:"center",flex:1},
+  readerPagedCurrent:{flex:1},
+  readerAdjacentPage:{...StyleSheet.absoluteFill,alignItems:"center"},
   readerPagedChapter:{fontFamily:"serif",fontSize:13,marginBottom:18},
   readerPageNumber:{fontSize:10,marginTop:"auto",paddingBottom:8,textAlign:"center",fontVariant:["tabular-nums"]},
   readerLeftTap:{bottom:0,left:0,position:"absolute",top:0,width:"32%"},

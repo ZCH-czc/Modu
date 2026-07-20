@@ -82,8 +82,9 @@ export function BookSourceBrowserBridge() {
     return () => clearTimeout(timer);
   }, [active, finish]);
 
-  const origin = useMemo(() => {
+  const browserUri = useMemo(() => {
     if (!active) return "about:blank";
+    if (active.request.method === "GET") return active.request.url;
     try {
       return new URL(active.request.url).origin + "/";
     } catch {
@@ -120,6 +121,21 @@ export function BookSourceBrowserBridge() {
     );
     if (challenge && attempt < 30) {
       setTimeout(function () { run(attempt + 1); }, 500);
+      return;
+    }
+    if (${JSON.stringify(active.request.method === "GET")}) {
+      var rendered = document.documentElement ? document.documentElement.outerHTML : "";
+      if (rendered.length < 80 && attempt < 12) {
+        setTimeout(function () { run(attempt + 1); }, 350);
+        return;
+      }
+      send({
+        channel: "modu-source-browser",
+        id: requestId,
+        ok: true,
+        status: 200,
+        text: rendered.slice(0, 6000000)
+      });
       return;
     }
     fetch(${JSON.stringify(active.request.url)}, ${JSON.stringify(options)})
@@ -229,7 +245,7 @@ true;
               ref={webRef}
               setSupportMultipleWindows={false}
               sharedCookiesEnabled
-              source={{ uri: origin }}
+              source={{ uri: browserUri }}
               thirdPartyCookiesEnabled
             />
           </View>

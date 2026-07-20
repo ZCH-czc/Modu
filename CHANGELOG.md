@@ -6,6 +6,22 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-07-20
+
+### Changed
+- Reduced bookshelf density on phones and tablets by removing the separate daily-reading card and consolidating search, filtering, and sorting controls.
+- Bounded the native reader paragraph cache around the active page while retaining adjacent-page pre-layout.
+- Pre-layout adjacent pages in Web Reader mode so page text is ready before the outgoing-page animation completes.
+- Keep the native reader mounted across online chapter changes and synchronize the new chapter before paint.
+
+### Fixed
+- Repaired corrupted Simplified Chinese labels in bookshelf sorting, empty states, and in-book search.
+- Hid inactive tabs and the bookshelf layer from accessibility and pointer input while another page or the reader is active.
+- Retry transient book-source network failures once and fall back to the internal browser bridge when native TLS or socket requests fail.
+- Normalize Yiove share links in the automated book-source test so diagnostics follow the same import path as the app.
+- Recover chapter lists from explicit table-of-contents links and conservative chapter-link detection when a source layout changes.
+- Return rendered DOM for GET requests handled by the internal source browser bridge, improving compatibility with JavaScript-rendered catalog pages.
+
 ## [1.5.5] - 2026-07-19
 
 ### Added

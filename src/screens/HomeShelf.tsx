@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { Animated, Easing } from "react-native";
 import {
   Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -5,11 +7,8 @@ import { memo,
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState } from "react";
 import { FlatList,
-  Animated,
-  Easing,
   ImageBackground,
   Pressable,
   ScrollView,
@@ -21,8 +20,6 @@ import { Text, TextInput, useI18n } from "../i18n";
 import type { DimensionValue } from "react-native";
 
 import { IOSPopupModal } from "../components/IOSPopupModal";
-import { ReadingInsightsModal } from "../components/ReadingInsightsModal";
-import { summarizeReadingStats, type ReadingStats } from "../services/readingStats";
 import type { Book } from "../types";
 import {
   defaultLibraryViewPreferences,
@@ -35,8 +32,6 @@ import {
 type HomeShelfProps = {
   books: Book[];
   importedCount: number;
-  readingGoalMinutes: number;
-  readingStats: ReadingStats;
   onBrowseWeb: () => void;
   onImport: () => void;
   onOnline: () => void;
@@ -65,14 +60,13 @@ const colorChoices = [
   "#302E25", "#686143", "#999068", "#C8BE92", "#EEE5C7",
 ] as const;
 
+
 const FILTER_OPTION_WIDTH = 62;
 
 export function HomeShelf({
   books,
   importedCount,
   onBrowseWeb,
-  readingGoalMinutes,
-  readingStats,
   onImport,
   onOnline,
   onOpen,
@@ -87,33 +81,17 @@ export function HomeShelf({
   const [shelfFilter, setShelfFilter] = useState<ShelfFilter>(defaultLibraryViewPreferences.filter);
   const [shelfSort, setShelfSort] = useState<ShelfSort>(defaultLibraryViewPreferences.sort);
   const [sortVisible, setSortVisible] = useState(false);
-  const filterProgress = useRef(new Animated.Value(0)).current;
   const [renameBook, setRenameBook] = useState<Book>();
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const filterProgress = useRef(new Animated.Value(0)).current;
   const [coverBook, setCoverBook] = useState<Book>();
   const [coverVisible, setCoverVisible] = useState(false);
   const [coverColorsValue, setCoverColorsValue] = useState<[string, string]>(["#365447", "#182A22"]);
   const [activeColor, setActiveColor] = useState<0 | 1>(0);
   const [savingCover, setSavingCover] = useState(false);
 
-  const [insightsVisible, setInsightsVisible] = useState(false);
-  const readingSummary = useMemo(() => summarizeReadingStats(readingStats), [readingStats]);
-  const goalRatio = Math.max(
-    0,
-    Math.min(1, readingSummary.todayMs / (readingGoalMinutes * 60_000)),
-  );
-  const goalProgress = useRef(new Animated.Value(goalRatio)).current;
-  useEffect(() => {
-
-    Animated.timing(goalProgress, {
-      duration: 360,
-      easing: Easing.bezier(0.22, 1, 0.36, 1),
-      toValue: goalRatio,
-      useNativeDriver: false,
-    }).start();
-  }, [goalProgress, goalRatio]);
 
   useEffect(() => {
     let active = true;
@@ -127,6 +105,7 @@ export function HomeShelf({
     };
   }, []);
 
+
   useEffect(() => {
     const filterIndex = shelfFilter === "local" ? 1 : shelfFilter === "web" ? 2 : 0;
     Animated.timing(filterProgress, {
@@ -138,6 +117,7 @@ export function HomeShelf({
   }, [filterProgress, shelfFilter]);
 
   const updateShelfFilter = useCallback((filter: ShelfFilter) => {
+
     setShelfFilter(filter);
     void saveLibraryViewPreferences({ filter, sort: shelfSort });
   }, [shelfSort]);
@@ -150,17 +130,17 @@ export function HomeShelf({
 
   const shelfFilterOptions = useMemo<Array<{ key: ShelfFilter; label: string }>>(
     () => [
-      { key: "all", label: resolvedLanguage === "en" ? "All" : "»´≤ø" },
-      { key: "local", label: resolvedLanguage === "en" ? "Local" : "±æµÿ" },
-      { key: "web", label: resolvedLanguage === "en" ? "Web" : "Õ¯“≥" },
+      { key: "all", label: resolvedLanguage === "en" ? "All" : "ÂÖ®ÈÉ®" },
+      { key: "local", label: resolvedLanguage === "en" ? "Local" : "Êú¨Âú∞" },
+      { key: "web", label: resolvedLanguage === "en" ? "Web" : "ÁΩëÈ°µ" },
     ],
     [resolvedLanguage],
   );
   const shelfSortLabels = useMemo<Record<ShelfSort, string>>(
     () => ({
-      recent: resolvedLanguage === "en" ? "Recently read" : "◊ÓΩ¸‘ƒ∂¡",
-      title: resolvedLanguage === "en" ? "Book title" : " È√˚≈≈–Ú",
-      progress: resolvedLanguage === "en" ? "Reading progress" : "‘ƒ∂¡Ω¯∂»",
+      recent: resolvedLanguage === "en" ? "Recently read" : "ÊúÄËøëÈòÖËØª",
+      title: resolvedLanguage === "en" ? "Book title" : "‰π¶ÂêçÊéíÂ∫è",
+      progress: resolvedLanguage === "en" ? "Reading progress" : "ÈòÖËØªËøõÂ∫¶",
     }),
     [resolvedLanguage],
   );
@@ -346,61 +326,25 @@ export function HomeShelf({
             </View>
           </View>
         </LinearGradient>
-        <Pressable
-          accessibilityLabel={resolvedLanguage === "en" ? "Open today's reading trace" : "\u67e5\u770b\u4eca\u65e5\u9605\u8bfb\u8db3\u8ff9"}
-          onPress={() => setInsightsVisible(true)}
-          style={({ pressed }) => [
-            styles.todayCard,
-            isTablet && styles.todayCardTablet,
-            pressed && styles.todayCardPressed,
-          ]}
-        >
-          <View style={styles.todayIcon}>
-            <Ionicons name="footsteps-outline" color="#486555" size={18} />
-          </View>
-          <View style={styles.todayCopy}>
-            <View style={styles.todayHeading}>
-              <Text style={styles.todayTitle}>
-                {resolvedLanguage === "en" ? "Today's reading" : "\u4eca\u65e5\u9605\u8bfb"}
-              </Text>
-              <Text style={styles.todayValue}>
-                {Math.floor(readingSummary.todayMs / 60_000)} / {readingGoalMinutes}
-                {resolvedLanguage === "en" ? " min" : " \u5206\u949f"}
-              </Text>
-            </View>
-            <View style={styles.todayTrack}>
-              <Animated.View
-                style={[
-                  styles.todayFill,
-                  goalRatio >= 1 && styles.todayFillComplete,
-                  { width: goalProgress.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }) },
-                ]}
-              />
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" color="#8B958E" size={16} />
-        </Pressable>
 
 
         <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>ÊàëÁöÑËóè‰π¶</Text>
-            <Text style={styles.sectionSubtitle}>ËøëÊù•ÁøªËøáÁöÑÈ°µÔºå‰∏éÁèçËóèÁöÑÊïÖ‰∫ã</Text>
-          </View>
+          <Text style={styles.sectionTitle}>ÊàëÁöÑËóè‰π¶</Text>
           <View style={styles.layoutBadge}>
-            <Ionicons name={columns > 1 ? "grid-outline" : "list-outline"} color="#6D7E74" size={14} />
-            <Text style={styles.layoutText}>{columns > 1 ? columns + " Âàó" : "Á¥ßÂáëÂàóË°®"}</Text>
+            <Ionicons name="library-outline" color="#6D7E74" size={14} />
+            <Text style={styles.layoutText}>{visibleBooks.length} {resolvedLanguage === "en" ? "books" : "Êú¨"}</Text>
           </View>
         </View>
-        <View style={[styles.shelfTools, isTablet && styles.shelfToolsTablet]}>
+        <View style={styles.shelfTools}>
           <View style={styles.shelfSearchBox}>
             <Ionicons name="search-outline" color="#617269" size={18} />
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
               onChangeText={setSearchQuery}
-              placeholder={resolvedLanguage === "en" ? "Search title, author, or chapter" : "—∞’“ È√˚°¢◊˜’ﬂªÚ’¬Ω⁄"}
+              placeholder={resolvedLanguage === "en" ? "Search title, author, or chapter" : "ÊêúÁ¥¢‰π¶Âêç„ÄÅ‰ΩúËÄÖÊàñÁ´†ËäÇ"}
               placeholderTextColor="#9A9D96"
+              {...({ placeholder: resolvedLanguage === "en" ? "Search title, author, or chapter" : "\u641c\u7d22\u4e66\u540d\u3001\u4f5c\u8005\u6216\u7ae0\u8282" } as Record<string, unknown>)}
               returnKeyType="search"
               selectionColor="#466554"
               style={styles.shelfSearchInput}
@@ -408,8 +352,9 @@ export function HomeShelf({
             />
             {searchQuery ? (
               <Pressable
-                accessibilityLabel={resolvedLanguage === "en" ? "Clear library search" : "«Â≥˝ Èº‹À—À˜"}
+                accessibilityLabel={resolvedLanguage === "en" ? "Clear library search" : "Ê∏ÖÈô§‰π¶Êû∂ÊêúÁ¥¢"}
                 hitSlop={10}
+                {...({ accessibilityLabel: resolvedLanguage === "en" ? "Clear library search" : "\u6e05\u9664\u4e66\u67b6\u641c\u7d22" } as Record<string, unknown>)}
                 onPress={() => setSearchQuery("")}
               >
                 <Ionicons name="close-circle" color="#8B938D" size={19} />
@@ -449,8 +394,9 @@ export function HomeShelf({
               })}
             </View>
             <Pressable
-              accessibilityLabel={resolvedLanguage === "en" ? "Choose library sort order" : "—°‘Ò Èº‹≈≈–Ú"}
+              accessibilityLabel={resolvedLanguage === "en" ? "Choose library sort order" : "Á≠õÈÄâ‰∏éÊéíÂàóËóè‰π¶"}
               onPress={() => setSortVisible(true)}
+              {...({ accessibilityLabel: resolvedLanguage === "en" ? "Filter and arrange the shelf" : "\u7b5b\u9009\u4e0e\u6392\u5217\u85cf\u4e66" } as Record<string, unknown>)}
               style={({ pressed }) => [styles.shelfSortButton, pressed && styles.toolPressed]}
             >
               <Ionicons name="swap-vertical-outline" color="#4E685A" size={17} />
@@ -460,6 +406,14 @@ export function HomeShelf({
               <Ionicons name="chevron-down" color="#7C8981" size={14} />
             </Pressable>
           </View>
+          <Pressable
+            accessibilityLabel={resolvedLanguage === "en" ? "Filter and arrange the shelf" : "\u7b5b\u9009\u4e0e\u6392\u5217\u85cf\u4e66"}
+            onPress={() => setSortVisible(true)}
+            style={({ pressed }) => [styles.compactToolButton, pressed && styles.toolPressed]}
+          >
+            <Ionicons name="options-outline" color="#4E685A" size={19} />
+            {shelfFilter !== "all" ? <View style={styles.activeFilterDot} /> : null}
+          </Pressable>
         </View>
       </View>
 
@@ -480,14 +434,8 @@ export function HomeShelf({
             <View style={styles.shelfEmptyIcon}>
               <Ionicons name="library-outline" color="#6C8175" size={25} />
             </View>
-            <Text style={styles.shelfEmptyTitle}>
-              {resolvedLanguage === "en" ? "No story found here" : "’‚¿Ôªπ√ª”–—∞µΩπ  ¬"}
-            </Text>
-            <Text style={styles.shelfEmptyText}>
-              {resolvedLanguage === "en"
-                ? "Try another title, or return to the whole library."
-                : "ªª“ª∏ˆ√˚◊÷ ‘ ‘£¨ªÚªÿµΩ»´≤ø≤ÿ È°£"}
-            </Text>
+            <Text style={styles.shelfEmptyTitle}>{resolvedLanguage === "en" ? "No story found here" : "\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5bfb\u5230\u6545\u4e8b"}</Text>
+            <Text style={styles.shelfEmptyText}>{resolvedLanguage === "en" ? "Try another title, or return to the whole library." : "\u6362\u4e00\u4e2a\u540d\u5b57\u8bd5\u8bd5\uff0c\u6216\u56de\u5230\u5168\u90e8\u85cf\u4e66\u3002"}</Text>
             <Pressable
               onPress={() => {
                 setSearchQuery("");
@@ -495,9 +443,7 @@ export function HomeShelf({
               }}
               style={styles.shelfEmptyAction}
             >
-              <Text style={styles.shelfEmptyActionText}>
-                {resolvedLanguage === "en" ? "Show all books" : "ø¥ø¥»´≤ø≤ÿ È"}
-              </Text>
+              <Text style={styles.shelfEmptyActionText}>{resolvedLanguage === "en" ? "Show all books" : "\u770b\u770b\u5168\u90e8\u85cf\u4e66"}</Text>
             </Pressable>
           </View>
         )}
@@ -522,14 +468,33 @@ export function HomeShelf({
               <Ionicons name="swap-vertical-outline" color="#486555" size={20} />
             </View>
             <View>
-              <Text style={styles.sortTitle}>
-                {resolvedLanguage === "en" ? "Arrange the shelf" : "Œ™≤ÿ È≈≈“ª≈≈"}
-              </Text>
-              <Text style={styles.sortSubtitle}>
-                {resolvedLanguage === "en" ? "Choose how stories meet you." : "—°‘Òπ  ¬”Îƒ„œ‡”ˆµƒ¥Œ–Ú°£"}
-              </Text>
+              <Text style={styles.sortTitle}>{resolvedLanguage === "en" ? "Arrange the shelf" : "\u4e3a\u85cf\u4e66\u6392\u4e00\u6392"}</Text>
+              <Text style={styles.sortSubtitle}>{resolvedLanguage === "en" ? "Choose how stories meet you." : "\u9009\u62e9\u6545\u4e8b\u4e0e\u4f60\u76f8\u9047\u7684\u6b21\u5e8f\u3002"}</Text>
             </View>
           </View>
+          <Text style={styles.sortGroupLabel}>
+            {resolvedLanguage === "en" ? "Show books from" : "Á≠õÈÄâËóè‰π¶"}
+          </Text>
+          <View style={styles.sortFilterRow}>
+            {shelfFilterOptions.map((option) => {
+              const active = option.key === shelfFilter;
+              return (
+                <Pressable
+                  accessibilityState={{ selected: active }}
+                  key={option.key}
+                  onPress={() => updateShelfFilter(option.key)}
+                  style={[styles.sortFilterOption, active && styles.sortFilterOptionActive]}
+                >
+                  <Text style={[styles.sortFilterText, active && styles.sortFilterTextActive]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.sortGroupLabel}>
+            {resolvedLanguage === "en" ? "Arrange by" : "ÊéíÂàóÊ¨°Â∫è"}
+          </Text>
           {(["recent", "title", "progress"] as ShelfSort[]).map((sort) => {
             const active = sort === shelfSort;
             return (
@@ -659,12 +624,6 @@ export function HomeShelf({
               onPress={() => void finishCoverColors()}
               style={[styles.renameSave, (!normalizeHexColor(coverColorsValue[0]) || !normalizeHexColor(coverColorsValue[1]) || savingCover) && styles.renameDisabled]}
             >
-      <ReadingInsightsModal
-        books={books}
-        onClose={() => setInsightsVisible(false)}
-        stats={readingStats}
-        visible={insightsVisible}
-      />
 
               <Text style={styles.renameSaveText}>{savingCover ? "Ê≠£Âú®‰øùÂ≠ò‚Ä¶" : "‰ΩøÁî®ËøôÁªÑÈ¢úËâ≤"}</Text>
             </Pressable>
@@ -897,13 +856,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingBottom: 16,
+    paddingBottom: 10,
     paddingHorizontal: 20,
-    paddingTop: 14,
+    paddingTop: 8,
   },
-  headerTablet: { paddingHorizontal: 28, paddingTop: 22 },
+  headerTablet: { paddingHorizontal: 28, paddingTop: 14 },
   eyebrow: { color: "#85887F", fontSize: 8, fontWeight: "900", letterSpacing: 2.1 },
-  title: { color: "#242A25", fontFamily: "serif", fontSize: 32, fontWeight: "800", lineHeight: 42 },
+  title: { color: "#242A25", fontFamily: "serif", fontSize: 29, fontWeight: "800", lineHeight: 37 },
   titleTablet: { fontSize: 38, lineHeight: 48 },
   headerActions: { alignItems: "center", flexDirection: "row", gap: 8 },
   roundButton: {
@@ -947,10 +906,10 @@ const styles = StyleSheet.create({
     elevation: 2,
     flexDirection: "row",
     marginHorizontal: 18,
-    minHeight: 92,
+    minHeight: 72,
     overflow: "hidden",
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 10,
     shadowColor: "#314239",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.06,
@@ -984,7 +943,7 @@ const styles = StyleSheet.create({
   todayFillComplete: { backgroundColor: "#416451" },
   summaryNumber: { color: "#2F4037", fontSize: 23, fontWeight: "900" },
   summaryLabel: { color: "#81877F", fontSize: 10, fontWeight: "600", marginTop: 1 },
-  summaryDivider: { backgroundColor: "#C4C9C1", height: 40, marginHorizontal: 15, width: 1.5 },
+  summaryDivider: { backgroundColor: "#C4C9C1", height: 32, marginHorizontal: 13, width: 1.5 },
   summaryQuote: { alignItems: "center", flex: 1, flexDirection: "row", gap: 10, minWidth: 0 },
   quoteIcon: {
     alignItems: "center",
@@ -1003,9 +962,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingBottom: 12,
+    paddingBottom: 8,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 13,
   },
   sectionTitle: { color: "#303832", fontSize: 17, fontWeight: "900" },
   sectionSubtitle: { color: "#96968F", fontSize: 9.5, marginTop: 3 },
@@ -1022,8 +981,10 @@ const styles = StyleSheet.create({
   },
   layoutText: { color: "#727B75", fontSize: 9.5, fontWeight: "700" },
   shelfTools: {
-    gap: 8,
-    paddingBottom: 13,
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 9,
+    paddingBottom: 10,
     paddingHorizontal: 18,
   },
   shelfToolsTablet: {
@@ -1036,13 +997,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#FBF9F4",
     borderColor: "#D4D5CE",
-    borderRadius: 17,
+    borderRadius: 15,
     borderWidth: 1,
     elevation: 1,
     flex: 1,
     flexDirection: "row",
     gap: 9,
-    minHeight: 46,
+    minHeight: 40,
     paddingHorizontal: 13,
     shadowColor: "#26372E",
     shadowOffset: { width: 0, height: 2 },
@@ -1053,15 +1014,11 @@ const styles = StyleSheet.create({
     color: "#303A34",
     flex: 1,
     fontSize: 13,
-    minHeight: 44,
+    minHeight: 38,
     paddingVertical: 0,
   },
   shelfToolRow: {
-    alignItems: "center",
-    flex: 1,
-    flexDirection: "row",
-    gap: 8,
-    justifyContent: "space-between",
+    display: "none",
   },
   shelfFilterControl: {
     backgroundColor: "#E2E5DF",
@@ -1123,6 +1080,26 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   toolPressed: { opacity: 0.78, transform: [{ scale: 0.97 }] },
+  compactToolButton: {
+    alignItems: "center",
+    backgroundColor: "#E8EBE6",
+    borderColor: "#D0D5CF",
+    borderRadius: 15,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: "center",
+    position: "relative",
+    width: 44,
+  },
+  activeFilterDot: {
+    backgroundColor: "#4D715E",
+    borderRadius: 3,
+    height: 6,
+    position: "absolute",
+    right: 7,
+    top: 6,
+    width: 6,
+  },
   shelfEmpty: {
     alignItems: "center",
     minHeight: 250,
@@ -1186,6 +1163,30 @@ const styles = StyleSheet.create({
   },
   sortTitle: { color: "#303A34", fontSize: 19, fontWeight: "900" },
   sortSubtitle: { color: "#92958F", fontSize: 10.5, marginTop: 3 },
+  sortGroupLabel: {
+    color: "#777F79",
+    fontSize: 10.5,
+    fontWeight: "800",
+    marginBottom: 7,
+    marginTop: 5,
+  },
+  sortFilterRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  sortFilterOption: {
+    alignItems: "center",
+    backgroundColor: "#ECEDE8",
+    borderColor: "#DCDED8",
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 38,
+  },
+  sortFilterOptionActive: {
+    backgroundColor: "#E0EAE3",
+    borderColor: "#88A090",
+  },
+  sortFilterText: { color: "#777F79", fontSize: 11, fontWeight: "700" },
+  sortFilterTextActive: { color: "#3F6250", fontWeight: "900" },
   sortOption: {
     alignItems: "center",
     borderColor: "#E2E2DB",

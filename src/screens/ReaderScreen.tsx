@@ -133,8 +133,8 @@ function createReaderSearchResult(
 
   const excerptStart = Math.max(0, pageMatch - 34);
   const excerptEnd = Math.min(compactPage.length, pageMatch + query.length + 58);
-  const prefix = excerptStart > 0 ? "°≠" : "";
-  const suffix = excerptEnd < compactPage.length ? "°≠" : "";
+  const prefix = excerptStart > 0 ? "‚Ä¶" : "";
+  const suffix = excerptEnd < compactPage.length ? "‚Ä¶" : "";
   return {
     key: `search-${pageIndex}`,
     pageIndex,
@@ -442,7 +442,7 @@ export function ReaderScreen({
       while (pageCursor < batchEnd && results.length < READER_SEARCH_RESULT_LIMIT) {
         const chapterTitle = book.pageTitles?.[pageCursor]
           || book.onlineChapters?.[book.onlineChapterIndex ?? 0]?.name
-          || (resolvedLanguage === "en" ? `Page ${pageCursor + 1}` : `µ⁄ ${pageCursor + 1} “≥`);
+          || (resolvedLanguage === "en" ? `Page ${pageCursor + 1}` : `Á¨¨ ${pageCursor + 1} È°µ`);
         const result = createReaderSearchResult(
           book.pages[pageCursor] ?? "",
           pageCursor,
@@ -514,6 +514,25 @@ export function ReaderScreen({
       setControlsVisible(false);
     }
   }, [preferences.immersiveMode]);
+  const activePageBookKeyRef = useRef(pageBookKey);
+  useLayoutEffect(() => {
+    if (activePageBookKeyRef.current === pageBookKey) return;
+    activePageBookKeyRef.current = pageBookKey;
+    const nextPage = Math.max(0, Math.min(initialPage, book.pages.length - 1));
+    pageCacheRef.current.clear();
+    paragraphLayoutsRef.current.clear();
+    pendingPageResetRef.current = undefined;
+    pageAnimatingRef.current = false;
+    dragTranslate.setValue(0);
+    pageTransition.setValue(0);
+    pageOpacity.setValue(1);
+    pageRuntimeRef.current = {
+      bookKey: pageBookKey,
+      currentIndex: nextPage,
+      phase: "ready",
+    };
+    setPageIndex(nextPage);
+  }, [book.pages.length, dragTranslate, initialPage, pageBookKey, pageOpacity, pageTransition]);
 
   const getPageParagraphs = useCallback(
     (index: number) => {
@@ -541,6 +560,11 @@ export function ReaderScreen({
   );
 
   useEffect(() => {
+    for (const cachedIndex of pageCacheRef.current.keys()) {
+      if (Math.abs(cachedIndex - pageIndex) > 6) {
+        pageCacheRef.current.delete(cachedIndex);
+      }
+    }
     const task = InteractionManager.runAfterInteractions(() => {
       getPageParagraphs(pageIndex - 2);
       getPageParagraphs(pageIndex + 2);
@@ -1317,7 +1341,8 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
                   autoCapitalize="none"
                   autoCorrect={false}
                   onChangeText={setChapterSearchQuery}
-                  placeholder={resolvedLanguage === "en" ? "Search in this book" : "‘⁄±æ È÷–—∞’““ªæ‰ª∞"}
+                  placeholder={resolvedLanguage === "en" ? "Search in this book" : "Âú®Êú¨‰π¶‰∏≠ÂØªÊâæ‰∏ÄÂè•ËØù"}
+                  {...({ placeholder: resolvedLanguage === "en" ? "Search in this book" : "\u5728\u672c\u4e66\u4e2d\u5bfb\u627e\u4e00\u53e5\u8bdd" } as Record<string, unknown>)}
                   placeholderTextColor={`${palette.muted}99`}
                   returnKeyType="search"
                   selectionColor={palette.accent}
@@ -1328,7 +1353,8 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
                   <ActivityIndicator color={palette.accent} size="small" />
                 ) : chapterSearchQuery ? (
                   <Pressable
-                    accessibilityLabel={resolvedLanguage === "en" ? "Clear search" : "«Â≥˝À—À˜"}
+                    accessibilityLabel={resolvedLanguage === "en" ? "Clear search" : "Ê∏ÖÈô§ÊêúÁ¥¢"}
+                    {...({ accessibilityLabel: resolvedLanguage === "en" ? "Clear search" : "\u6e05\u9664\u641c\u7d22" } as Record<string, unknown>)}
                     hitSlop={10}
                     onPress={() => setChapterSearchQuery("")}
                   >
@@ -1339,28 +1365,20 @@ const handleParagraphLongPress = useCallback((event: GestureResponderEvent) => {
               {chapterSearchQuery.trim() ? (
                 <View style={styles.readerSearchArea}>
                   <View style={styles.readerSearchHeader}>
-                    <Text style={[styles.bookmarkSectionTitle, { color: palette.text }]}>
-                      {resolvedLanguage === "en" ? "Found in the pages" : "◊÷æ‰¬‰‘⁄’‚–©“≥¿Ô"}
-                    </Text>
+                    <Text style={[styles.bookmarkSectionTitle, { color: palette.text }]}>{resolvedLanguage === "en" ? "Found in the pages" : "\u5728\u4e66\u9875\u4e2d\u5bfb\u5230"}</Text>
                     <Text style={[styles.bookmarkSectionCount, { color: palette.muted }]}>
                       {chapterSearching
-                        ? (resolvedLanguage === "en" ? "Searching°≠" : "’˝‘⁄∑≠’“°≠")
+                        ? (resolvedLanguage === "en" ? "Searching\u2026" : "\u6b63\u5728\u5bfb\u627e\u2026")
                         : (resolvedLanguage === "en"
                           ? `${chapterSearchResults.length}${chapterSearchResults.length >= READER_SEARCH_RESULT_LIMIT ? "+" : ""} results`
-                          : `${chapterSearchResults.length}${chapterSearchResults.length >= READER_SEARCH_RESULT_LIMIT ? "+" : ""} ¥¶`)}
+                          : `${chapterSearchResults.length}${chapterSearchResults.length >= READER_SEARCH_RESULT_LIMIT ? "+" : ""} \u6761`)}
                     </Text>
                   </View>
                   {!chapterSearching && chapterSearchResults.length === 0 ? (
                     <View style={styles.readerSearchEmpty}>
                       <Ionicons name="leaf-outline" size={25} color={`${palette.muted}88`} />
-                      <Text style={[styles.readerSearchEmptyTitle, { color: palette.text }]}>
-                        {resolvedLanguage === "en" ? "No matching words" : "√ª”–—∞µΩ’‚æ‰ª∞"}
-                      </Text>
-                      <Text style={[styles.readerSearchEmptyText, { color: palette.muted }]}>
-                        {resolvedLanguage === "en"
-                          ? "Try a name, a place, or a shorter phrase."
-                          : " ‘ ‘»ÀŒÔ°¢µÿµ„£¨ªÚ∏¸∂Ãµƒ“ª∂Œ◊÷°£"}
-                      </Text>
+                      <Text style={[styles.readerSearchEmptyTitle, { color: palette.text }]}>{resolvedLanguage === "en" ? "No matching words" : "\u6ca1\u6709\u5bfb\u5230\u8fd9\u53e5\u8bdd"}</Text>
+                      <Text style={[styles.readerSearchEmptyText, { color: palette.muted }]}>{resolvedLanguage === "en" ? "Try a name, a place, or a shorter phrase." : "\u8bd5\u8bd5\u4eba\u540d\u3001\u5730\u70b9\uff0c\u6216\u66f4\u77ed\u7684\u8bcd\u53e5\u3002"}</Text>
                     </View>
                   ) : (
                     <FlatList
