@@ -12,6 +12,7 @@ import {
   Animated as RNAnimated,
   BackHandler,
   Easing,
+  FlatList,
   Platform,
   Pressable,
   ScrollView,
@@ -45,9 +46,14 @@ import {
 } from "../services/readerControls";
 
 type WebVisit = { url: string; title: string; visitedAt: number };
-type BrowserPanel = "history" | undefined;
+type WebCatalogHint = WebVisit & {
+  bookTitle?: string;
+  chapterLinks?: WebChapterLink[];
+};
+type BrowserPanel = "history" | "catalog" | undefined;
 const WEB_HISTORY_KEY = "modu.web-history.v1";
 const WEB_FAVORITES_KEY = "modu.web-favorites.v1";
+const WEB_CATALOG_HINTS_KEY = "modu.web-catalog-hints.v1";
 
 type ContinuousCapture = {
   author?: string;
@@ -141,10 +147,13 @@ const CATALOG_EXTRACTION_SCRIPT = String.raw`
       var label = (link.textContent || '').replace(/[\t\n\u00a0 ]+/g, ' ').trim();
       var compact = label.replace(/\s+/g, '');
       var href = link.href || '';
-      if (!href || !/^https?:/i.test(href) || label.length < 2 || label.length > 100 || seen[href]) return;
+      if (!href || !/^https?:/i.test(href) || label.length < 1 || label.length > 100 || seen[href] || href.split('#')[0] === location.href.split('#')[0]) return;
       var looksLikeChapter = /(?:第[零〇一二两三四五六七八九十百千万0-9]+[章节回卷集部篇]|chapter\s*[0-9]+|序章|楔子|番外)/i.test(compact);
       var looksLikeChapterUrl = /\/(?:chapter|chap|read|book)\b|[_/-](?:chapter|chap|read)[_/-]?\d/i.test(href);
-      if (!looksLikeChapter && !(relaxed && looksLikeChapterUrl)) return;
+      var navigationLabel = /^(首页|主页|返回|上一页|下一页|登录|注册|书架|排行|分类|搜索|home|back|next|login|register)$/i.test(compact);
+      var sameOrigin = false;
+      try { sameOrigin = new URL(href).origin === location.origin; } catch (_) {}
+      if (!looksLikeChapter && !(relaxed && (looksLikeChapterUrl || (sameOrigin && !navigationLabel)))) return;
       seen[href] = true;
       links.push({ title: label.slice(0, 100), url: href });
     };
@@ -153,6 +162,7 @@ const CATALOG_EXTRACTION_SCRIPT = String.raw`
       seen = {}; links = [];
       var containers = Array.prototype.slice.call(document.querySelectorAll('#list,.list,.chapter-list,.chapters,.catalog,[class*="chapter"],[id*="chapter"],main,article'));
       var best = containers.sort(function (a, b) { return b.querySelectorAll('a[href]').length - a.querySelectorAll('a[href]').length; })[0];
+      if ((!best || best.querySelectorAll('a[href]').length < 3) && document.body) best = document.body;
       if (best && best.querySelectorAll('a[href]').length >= 3) {
         Array.prototype.forEach.call(best.querySelectorAll('a[href]'), function (link) { add(link, true); });
       }
@@ -179,6 +189,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const [currentTitle, setCurrentTitle] = useState("");
   const [webHistory, setWebHistory] = useState<WebVisit[]>([]);
   const [webFavorites, setWebFavorites] = useState<WebVisit[]>([]);
+  const [catalogHints, setCatalogHints] = useState<WebCatalogHint[]>([]);
   const [addressFocused, setAddressFocused] = useState(false);
   const [browserPanel, setBrowserPanel] = useState<BrowserPanel>();
   const [canGoBack, setCanGoBack] = useState(false);
@@ -209,6 +220,8 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const extractionActionRef=useRef<"read"|"save"|undefined>(undefined);
   const readerNavigationRef=useRef(false);
   const catalogRequestRef=useRef(false);
+  const catalogRequestKindRef=useRef<"marked"|"reader"|undefined>(undefined);
+  const catalogRequestSeedRef=useRef<WebChapterLink[]>([]);
   const readerScrollRef=useRef<ScrollView>(null);
   const {width:screenWidth,height:screenHeight}=useWindowDimensions();
   const readerPalette=READER_MODE_THEMES[readerTheme];
@@ -261,14 +274,46 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
     }).slice(0, 6);
   }, [address, webFavorites, webHistory]);
   const isFavorite = Boolean(currentUrl && webFavorites.some((item) => item.url === currentUrl));
+  const normalizedCurrentUrl = normalizeCatalogUrl(currentUrl);
+  const currentCatalogHint = catalogHints.find((item) => normalizeCatalogUrl(item.url) === normalizedCurrentUrl);
+  const isCatalogMarked = Boolean(currentCatalogHint);
 
   useEffect(() => {
-    Promise.all([AsyncStorage.getItem(WEB_HISTORY_KEY), AsyncStorage.getItem(WEB_FAVORITES_KEY)])
-      .then(([historyValue, favoritesValue]) => {
+    Promise.all([
+      AsyncStorage.getItem(WEB_HISTORY_KEY),
+      AsyncStorage.getItem(WEB_FAVORITES_KEY),
+      AsyncStorage.getItem(WEB_CATALOG_HINTS_KEY),
+    ])
+      .then(([historyValue, favoritesValue, catalogValue]) => {
         if (historyValue) setWebHistory(JSON.parse(historyValue));
         if (favoritesValue) setWebFavorites(JSON.parse(favoritesValue));
+        if (catalogValue) setCatalogHints(JSON.parse(catalogValue));
       })
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!currentCatalogHint?.chapterLinks?.length) return;
+    setChapterCatalog(mergeWebChapterLinks(currentCatalogHint.chapterLinks));
+  }, [currentCatalogHint]);
+
+  const rememberCatalogHint = useCallback((hint: WebCatalogHint) => {
+    const normalized = normalizeCatalogUrl(hint.url);
+    if (!normalized) return;
+    setCatalogHints((current) => {
+      const existing = current.find((item) => normalizeCatalogUrl(item.url) === normalized);
+      const nextHint = {
+        ...existing,
+        ...hint,
+        url: normalized,
+        title: hint.title || existing?.title || normalized,
+        visitedAt: Date.now(),
+        chapterLinks: mergeWebChapterLinks(existing?.chapterLinks, hint.chapterLinks),
+      };
+      const next = [nextHint, ...current.filter((item) => normalizeCatalogUrl(item.url) !== normalized)].slice(0, 80);
+      void AsyncStorage.setItem(WEB_CATALOG_HINTS_KEY, JSON.stringify(next));
+      return next;
+    });
   }, []);
 
   const recordVisit = useCallback((target: string, title?: string) => {
@@ -449,14 +494,26 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
         payload?: WebPageExtraction;
       };
       if (message.type === "modu-catalog" && message.payload?.chapterLinks) {
+        const requestKind = catalogRequestKindRef.current;
         catalogRequestRef.current = false;
+        catalogRequestKindRef.current = undefined;
         setReaderLoading(false);
         const merged = mergeWebChapterLinks(
-          chapterCatalog,
+          catalogRequestSeedRef.current,
           message.payload.chapterLinks,
           readerHistory.map(({ title, url }) => ({ title, url })),
         );
         setChapterCatalog(merged);
+        const tocUrl = message.payload.tocUrl || currentUrl;
+        if (tocUrl) {
+          rememberCatalogHint({
+            url: tocUrl,
+            title: message.payload.bookTitle || currentTitle || tocUrl,
+            bookTitle: message.payload.bookTitle,
+            chapterLinks: merged,
+            visitedAt: Date.now(),
+          });
+        }
         setReaderHistory((current) => orderReaderHistory(
           current.map((chapter) => ({ ...chapter, chapterLinks: merged })),
           merged,
@@ -476,12 +533,20 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             chapters: readerHistory.map(({ title, content, url }) => ({ title, content, url })),
           }, true);
         }
+        if (requestKind === "marked") setBrowserPanel("catalog");
         return;
       }
       if (message.type === "modu-catalog-error") {
+        const requestKind = catalogRequestKindRef.current;
         catalogRequestRef.current = false;
+        catalogRequestKindRef.current = undefined;
         setReaderLoading(false);
-        Alert.alert("没有识别到章节目录", message.message || "这一页没有找到清晰的章节入口。");
+        Alert.alert(
+          requestKind === "marked" ? t("目录页已标记") : t("没有识别到章节目录"),
+          requestKind === "marked"
+            ? t("标记已保存在本机，但暂时没有识别出清晰的章节入口。")
+            : message.message || t("这一页没有找到清晰的章节入口。"),
+        );
         return;
       }
       if (message.type === "modu-extraction" && message.payload) {
@@ -604,6 +669,22 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   };
 
 
+  const markCurrentAsCatalog = () => {
+    if (!currentUrl || loading || extracting || saving || capturing) return;
+    rememberCatalogHint({
+      url: currentUrl,
+      title: currentTitle || currentUrl,
+      visitedAt: Date.now(),
+      chapterLinks: currentCatalogHint?.chapterLinks,
+      bookTitle: currentCatalogHint?.bookTitle,
+    });
+    catalogRequestRef.current = true;
+    catalogRequestKindRef.current = "marked";
+    catalogRequestSeedRef.current = mergeWebChapterLinks(currentCatalogHint?.chapterLinks);
+    setExtracting(true);
+    webRef.current?.injectJavaScript(CATALOG_EXTRACTION_SCRIPT);
+  };
+
   const startContinuousCapture = () => {
     if (!preview?.nextUrl) return;
     captureRef.current = {
@@ -673,6 +754,8 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
     const target=preview?.tocUrl;
     if(!target||readerLoading)return;
     catalogRequestRef.current=true;
+    catalogRequestKindRef.current="reader";
+    catalogRequestSeedRef.current=mergeWebChapterLinks(chapterCatalog);
     setReaderPanel(undefined);
     setReaderLoading(true);
     setAddress(target);
@@ -982,6 +1065,44 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
               ) : null}
             </View>
           ) : null}
+          {browserPanel === "catalog" ? (
+            <View style={styles.historyPanel}>
+              <View style={styles.historyHeader}>
+                <View style={styles.catalogHeaderCopy}>
+                  <Text style={styles.historyTitle}>{t("章节目录")}</Text>
+                  <Text style={styles.historySubtitle}>{t("{count} 个章节入口 · 仅保存在本机", { count: chapterCatalog.length })}</Text>
+                </View>
+                <View style={styles.catalogHeaderActions}>
+                  <Pressable
+                    accessibilityLabel={t("重新识别目录页")}
+                    disabled={extracting}
+                    onPress={markCurrentAsCatalog}
+                    style={styles.historyClose}
+                  >
+                    {extracting ? <ActivityIndicator color="#52655A" size="small" /> : <Ionicons color="#52655A" name="refresh" size={18} />}
+                  </Pressable>
+                  <Pressable accessibilityLabel={t("关闭章节目录")} onPress={() => setBrowserPanel(undefined)} style={styles.historyClose}>
+                    <Ionicons color="#52655A" name="close" size={19} />
+                  </Pressable>
+                </View>
+              </View>
+              <FlatList
+                data={chapterCatalog}
+                initialNumToRender={18}
+                keyExtractor={(item, index) => item.url + "-" + index}
+                renderItem={({ item, index }) => (
+                  <Pressable onPress={() => openAddress(item.url)} style={styles.catalogItem}>
+                    <Text style={styles.catalogItemIndex}>{index + 1}</Text>
+                    <Text numberOfLines={2} style={styles.catalogItemTitle}>{item.title}</Text>
+                    <Ionicons color="#A3AAA4" name="chevron-forward" size={15} />
+                  </Pressable>
+                )}
+                showsVerticalScrollIndicator={false}
+                style={styles.catalogList}
+                windowSize={7}
+              />
+            </View>
+          ) : null}
           {loading ? (
             <Animated.View entering={FadeIn.duration(100)} exiting={FadeOut.duration(100)} style={styles.loadingLine} />
           ) : null}
@@ -994,6 +1115,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             <ToolButton accessibilityLabel={t("前进")} disabled={!canGoForward} icon="arrow-forward" onPress={() => webRef.current?.goForward()} />
             <ToolButton accessibilityLabel={t("浏览历史")} icon="time-outline" onPress={() => setBrowserPanel(browserPanel === "history" ? undefined : "history")} />
             <ToolButton accessibilityLabel={t(isFavorite ? "取消收藏网页" : "收藏当前网页")} disabled={!currentUrl} icon={isFavorite ? "star" : "star-outline"} onPress={toggleFavorite} />
+            <ToolButton
+              accessibilityLabel={t(isCatalogMarked && currentCatalogHint?.chapterLinks?.length ? "打开已识别目录" : isCatalogMarked ? "重新识别目录页" : "标记当前页为目录")}
+              active={isCatalogMarked}
+              disabled={!currentUrl || loading || extracting || saving || capturing}
+              icon={isCatalogMarked ? "list-circle" : "list-circle-outline"}
+              onPress={isCatalogMarked && currentCatalogHint?.chapterLinks?.length ? () => setBrowserPanel("catalog") : markCurrentAsCatalog}
+            />
           </View>
           <View style={styles.browserActions}>
             <Pressable
@@ -1314,18 +1442,18 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   );
 }
 
-function ToolButton({ accessibilityLabel, disabled, icon, onPress }: { accessibilityLabel: string; disabled?: boolean; icon: keyof typeof Ionicons.glyphMap; onPress: () => void }) {
+function ToolButton({ accessibilityLabel, active, disabled, icon, onPress }: { accessibilityLabel: string; active?: boolean; disabled?: boolean; icon: keyof typeof Ionicons.glyphMap; onPress: () => void }) {
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
+      accessibilityState={{ disabled: Boolean(disabled), selected: Boolean(active) }}
       disabled={disabled}
       hitSlop={4}
       onPress={onPress}
-      style={({ pressed }) => [styles.toolButton, disabled && styles.toolDisabled, pressed && !disabled && styles.toolPressed]}
+      style={({ pressed }) => [styles.toolButton, active && styles.toolActive, disabled && styles.toolDisabled, pressed && !disabled && styles.toolPressed]}
     >
-      <Ionicons color={disabled ? "#C8C5BD" : "#52685C"} name={icon} size={20} />
+      <Ionicons color={disabled ? "#C8C5BD" : active ? "#F8F4EA" : "#52685C"} name={icon} size={20} />
     </Pressable>
   );
 }
@@ -1374,6 +1502,17 @@ function paginateReaderContent(content:string,limit:number){
 
 function safeHost(value: string) {
   try { return new URL(value).hostname.replace(/^www\./, ""); } catch { return value; }
+}
+
+function normalizeCatalogUrl(value: string) {
+  if (!value.toLowerCase().startsWith("http://") && !value.toLowerCase().startsWith("https://")) return "";
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return value.replace(/#.*$/, "");
+  }
 }
 
 function normalizeAddress(value: string) {
@@ -1425,10 +1564,16 @@ const styles = StyleSheet.create({
   homeRecentTitle: { color: "#58625C", flex: 1, fontSize: 12 },
   historyPanel: { ...StyleSheet.absoluteFill, backgroundColor: "#F8F5EE", padding: 18, zIndex: 25 },
   historyHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+  catalogHeaderCopy: { flex: 1, minWidth: 0 },
+  catalogHeaderActions: { flexDirection: "row", gap: 8 },
   historyTitle: { color: "#2D3932", fontSize: 20, fontWeight: "800" },
   historySubtitle: { color: "#999B96", fontSize: 10.5, marginTop: 4 },
   historyClose: { alignItems: "center", backgroundColor: "#E8ECE7", borderRadius: 15, height: 38, justifyContent: "center", width: 38 },
   historyItem: { alignItems: "center", borderBottomColor: "#E2E0DA", borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 11, minHeight: 62 },
+  catalogItem: { alignItems: "center", borderBottomColor: "#E2E0DA", borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 11, minHeight: 56, paddingHorizontal: 2 },
+  catalogList: { flex: 1 },
+  catalogItemTitle: { color: "#3B4740", flex: 1, fontSize: 13, fontWeight: "700" },
+  catalogItemIndex: { color: "#799083", fontSize: 11, fontVariant: ["tabular-nums"], textAlign: "right", width: 32 },
   historyIcon: { alignItems: "center", backgroundColor: "#E8EDE9", borderRadius: 13, height: 36, justifyContent: "center", width: 36 },
   historyCopy: { flex: 1, minWidth: 0 },
   historyItemTitle: { color: "#3B4740", fontSize: 13, fontWeight: "700" },
@@ -1443,14 +1588,15 @@ const styles = StyleSheet.create({
   retryButton: { borderColor: "#6A8174", borderRadius: 16, borderWidth: 1, marginTop: 20, paddingHorizontal: 22, paddingVertical: 11 },
   retryText: { color: "#526C5E", fontSize: 13, fontWeight: "700" },
   loadingLine: { position: "absolute", left: 0, right: "35%", top: 0, height: 2, backgroundColor: "#557967" },
-  toolbar: { minHeight: Platform.OS === "android" ? 68 : 64, paddingHorizontal: 8, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FBF9F4", borderTopColor: "#E7E3DA", borderTopWidth: StyleSheet.hairlineWidth },
+  toolbar: { minHeight: Platform.OS === "android" ? 68 : 64, paddingHorizontal: 6, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FBF9F4", borderTopColor: "#E7E3DA", borderTopWidth: StyleSheet.hairlineWidth },
   navButtons: { flex: 1, minWidth: 0, flexDirection: "row", justifyContent: "space-between" },
-  toolButton: { width: 38, height: 44, borderRadius: 16, backgroundColor: "#ECEFEA", alignItems: "center", justifyContent: "center" },
+  toolButton: { width: 34, height: 44, borderRadius: 15, backgroundColor: "#ECEFEA", alignItems: "center", justifyContent: "center" },
+  toolActive: { backgroundColor: "#557565" },
   toolPressed: { transform: [{ scale: 0.92 }], backgroundColor: "#E1E7E2" },
   toolDisabled: { backgroundColor: "#F0EEE8" },
-  browserActions: { flexDirection: "row", gap: 6 },
-  saveWebButton: { alignItems: "center", backgroundColor: "#E8EEE9", borderColor: "#CBD7CF", borderRadius: 17, borderWidth: 1, height: 46, justifyContent: "center", width: 46 },
-  extractButton: { width: 48, height: 46, borderRadius: 17, backgroundColor: "#426753", alignItems: "center", justifyContent: "center" },
+  browserActions: { flexDirection: "row", gap: 4 },
+  saveWebButton: { alignItems: "center", backgroundColor: "#E8EEE9", borderColor: "#CBD7CF", borderRadius: 17, borderWidth: 1, height: 46, justifyContent: "center", width: 44 },
+  extractButton: { width: 46, height: 46, borderRadius: 17, backgroundColor: "#426753", alignItems: "center", justifyContent: "center" },
   actionPressed: { transform: [{ scale: 0.92 }] },
   buttonDisabled: { opacity: 0.46 },
   previewShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(30,37,33,0.36)", justifyContent: "flex-end" },

@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 
-export const CURRENT_APP_VERSION = "1.5.8";
+export const CURRENT_APP_VERSION = "1.5.9";
 export const RELEASES_PAGE_URL = "https://github.com/ZCH-czc/Modu/releases";
 const LATEST_RELEASE_API = "https://api.github.com/repos/ZCH-czc/Modu/releases/latest";
 

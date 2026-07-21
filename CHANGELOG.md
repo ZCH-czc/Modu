@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-07-21
+
+### Added
+- Let Web Finder users mark the current page as a chapter list, rescan it with relaxed catalog heuristics, and reuse the locally stored result on later visits.
+
 ## [1.5.8] - 2026-07-21
 
 ### Added
@@ -148,7 +153,9 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 - Added built-in web discovery with reader mode, horizontal pagination, and optional vertical scrolling.
 - Added animated reader settings, onboarding, predictive Android back gestures, and initial performance optimizations.
 
-[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/ZCH-czc/Modu/compare/v1.5.9...HEAD
+[1.5.9]: https://github.com/ZCH-czc/Modu/compare/v1.5.8...v1.5.9
+[1.5.8]: https://github.com/ZCH-czc/Modu/compare/v1.5.7...v1.5.8
 [1.5.4]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.4
 [1.5.3]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.3
 [1.5.2]: https://github.com/ZCH-czc/Modu/releases/tag/v1.5.2
