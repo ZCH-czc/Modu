@@ -2,6 +2,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import { HTMLElement, parse } from "node-html-parser";
 
+import {
+  extractLegadoJsonValue,
+  parseLegadoPayload,
+  renderLegadoPagePattern,
+  selectLegadoJsonValues,
+  splitLegadoRule,
+} from "./legadoRuleEngine";
+
 import type {
   Book,
   BookSourceConfig,
@@ -22,6 +30,7 @@ export type BookSourceBrowserRequest = {
   headers: Record<string, string>;
   body?: string;
   method: string;
+  delayMs?: number;
 };
 type BookSourceBrowserRequestHandler = (request: BookSourceBrowserRequest) => Promise<string>;
 let bookSourceBrowserRequestHandler: BookSourceBrowserRequestHandler | undefined;
@@ -174,26 +183,25 @@ export async function searchSource(
   if (!config.searchUrl || !config.ruleSearch) {
     throw new Error("这个书源没有可用的搜索规则。");
   }
+  if (!config.ruleSearch.bookList) throw new Error("书源缺少搜索列表规则。");
   const request = sourceRequest(renderTemplate(config.searchUrl, keyword, 1), config);
-  const html = await requestText(request.url, request.headers, { body: request.body, method: request.method });
-  const root = parse(html);
-  const listRule = safeStaticSelector(config.ruleSearch.bookList);
-  if (!listRule) throw new Error("书源缺少搜索列表规则。");
+  const responseText = await requestText(request.url, request.headers, request);
+  const payload = parseSourceRulePayload(responseText);
   const results: OnlineBookResult[] = [];
-  for (const node of selectNodes(root, listRule)) {
-    const name = extract(node, config.ruleSearch.name);
-    const bookUrl = resolveOptionalUrl(extract(node, config.ruleSearch.bookUrl), config.bookSourceUrl);
+  for (const node of selectSourceRuleNodes(payload, config.ruleSearch.bookList)) {
+    const name = extractSourceRule(node, config.ruleSearch.name);
+    const bookUrl = resolveOptionalUrl(extractSourceRule(node, config.ruleSearch.bookUrl), config.bookSourceUrl);
     if (!name || !bookUrl) continue;
     results.push({
       sourceId: source.id,
       sourceName: config.bookSourceName,
       name,
-      author: cleanAuthor(extract(node, config.ruleSearch.author)),
+      author: cleanAuthor(extractSourceRule(node, config.ruleSearch.author)),
       bookUrl,
-      coverUrl: resolveOptionalUrl(extract(node, config.ruleSearch.coverUrl), config.bookSourceUrl),
-      intro: extract(node, config.ruleSearch.intro),
-      wordCount: extract(node, config.ruleSearch.wordCount),
-      latestChapter: extract(node, config.ruleSearch.lastChapter),
+      coverUrl: resolveOptionalUrl(extractSourceRule(node, config.ruleSearch.coverUrl), config.bookSourceUrl),
+      intro: extractSourceRule(node, config.ruleSearch.intro),
+      wordCount: extractSourceRule(node, config.ruleSearch.wordCount),
+      latestChapter: extractSourceRule(node, config.ruleSearch.lastChapter),
     });
   }
   return results;
@@ -378,22 +386,23 @@ export async function loadBookInfo(
   }
   const rules = source.config.ruleBookInfo;
   if (!rules) return result;
-  const html = await requestText(result.bookUrl, sourceHeaders(source.config, result.bookUrl));
-  const root = parse(html);
-  const variables = extractLegadoVariables(root, rules.init);
-  const read = (rule?: string, preserveHtml = false) => extractLegadoValue(root, rule, variables, preserveHtml);
+  const request = sourceRequest(result.bookUrl, source.config);
+  const responseText = await requestText(request.url, request.headers, request);
+  const payload = parseSourceRulePayload(responseText);
+  const variables = extractLegadoVariables(payload, rules.init);
+  const read = (rule?: string, preserveHtml = false) => extractLegadoValue(payload, rule, variables, preserveHtml);
   return {
     ...result,
     name: read(rules.name) || result.name,
     author: cleanAuthor(read(rules.author)) || result.author,
     intro: read(rules.intro, true) || result.intro,
     wordCount: read(rules.wordCount) || result.wordCount,
-    coverUrl: resolveOptionalUrl(read(rules.coverUrl), result.bookUrl) || result.coverUrl,
+    coverUrl: resolveOptionalUrl(read(rules.coverUrl), request.url) || result.coverUrl,
     latestChapter: read(rules.lastChapter) || result.latestChapter,
-    tocUrl: resolveOptionalUrl(read(rules.tocUrl), result.bookUrl) || result.tocUrl,
+    tocUrl: resolveOptionalUrl(read(rules.tocUrl), request.url) || result.tocUrl,
   };
 }
-function extractLegadoVariables(root: HTMLElement, init?: string) {
+function extractLegadoVariables(root: SourceRulePayload, init?: string) {
   const values: Record<string, string> = {};
   if (!init || !init.startsWith("@put:")) return values;
   const pairs = init.matchAll(/([A-Za-z_][\w]*)\s*:\s*"((?:\\.|[^"])*)"/g);
@@ -404,14 +413,10 @@ function extractLegadoVariables(root: HTMLElement, init?: string) {
   }
   return values;
 }
-function extractStaticAlternatives(root: HTMLElement, rule: string, preserveHtml = false) {
-  for (const option of rule.split("&&")) {
-    const value = extract(root, option.trim(), preserveHtml);
-    if (value) return value;
-  }
-  return "";
+function extractStaticAlternatives(root: SourceRulePayload, rule: string, preserveHtml = false) {
+  return extractSourceRule(root, rule, preserveHtml);
 }
-function extractLegadoValue(root: HTMLElement, rule: string | undefined, variables: Record<string, string>, preserveHtml = false) {
+function extractLegadoValue(root: SourceRulePayload, rule: string | undefined, variables: Record<string, string>, preserveHtml = false) {
   if (!rule) return "";
   const variable = rule.match(/@get:\{([^}]+)\}/);
   if (!variable || variable.index === undefined) return extractStaticAlternatives(root, rule, preserveHtml);
@@ -433,22 +438,23 @@ export async function loadChapterList(
     const url = queue.shift()!;
     if (visited.has(url)) continue;
     visited.add(url);
-    const html = await requestText(url, sourceHeaders(source.config, url));
-    const root = parse(html);
-    const matchedNodes = selectNodes(root, safeStaticSelector(rules.chapterList) || rules.chapterList);
+    const request = sourceRequest(url, source.config);
+    const responseText = await requestText(request.url, request.headers, request);
+    const payload = parseSourceRulePayload(responseText);
+    const matchedNodes = selectSourceRuleNodes(payload, rules.chapterList);
     for (const node of matchedNodes) {
-      const name = extract(node, rules.chapterName);
-      const chapterUrl = resolveOptionalUrl(extract(node, rules.chapterUrl), url);
+      const name = extractSourceRule(node, rules.chapterName);
+      const chapterUrl = resolveOptionalUrl(extractSourceRule(node, rules.chapterUrl), request.url);
       if (name && chapterUrl) raw.push({ name, url: chapterUrl });
     }
-    if (!matchedNodes.length) {
-      raw.push(...discoverConservativeChapterLinks(root, url));
-      const discoveredToc = discoverTableOfContentsUrl(root, url);
+    if (!matchedNodes.length && payload.kind === "html") {
+      raw.push(...discoverConservativeChapterLinks(payload.value, request.url));
+      const discoveredToc = discoverTableOfContentsUrl(payload.value, request.url);
       if (discoveredToc && !visited.has(discoveredToc) && !queue.includes(discoveredToc)) {
         queue.push(discoveredToc);
       }
     }
-    const next = resolveOptionalUrl(extract(root, rules.nextTocUrl), url);
+    const next = resolveOptionalUrl(extractSourceRule(payload, rules.nextTocUrl), request.url);
     if (next && !visited.has(next) && !queue.includes(next)) queue.push(next);
   }
   const unique = new Map<string, OnlineChapter>();
@@ -547,14 +553,15 @@ export async function loadChapterContent(
   for (let page = 0; url && page < 8; page += 1) {
     if (visited.has(url)) break;
     visited.add(url);
-    const html = await requestText(url, sourceHeaders(source.config, url));
-    const root = parse(html);
-    const rawContent = extract(root, rules.content, true);
+    const request = sourceRequest(url, source.config);
+    const responseText = await requestText(request.url, request.headers, request);
+    const payload = parseSourceRulePayload(responseText);
+    const rawContent = extractSourceRule(payload, rules.content, true);
     const text = htmlToReadableText(rawContent);
     if (text) parts.push(text);
 
-    const nextRaw = extract(root, rules.nextContentUrl);
-    const next = resolveOptionalUrl(nextRaw, url);
+    const nextRaw = extractSourceRule(payload, rules.nextContentUrl);
+    const next = resolveOptionalUrl(nextRaw, request.url);
     if (!next || visited.has(next)) break;
     url = next;
   }
@@ -569,11 +576,13 @@ function isInitTxtRule(rule: string) {
   return /initTxt\s*\(/i.test(rule) && /java\.ajax/i.test(rule);
 }
 async function loadInitTxtContent(source: ImportedBookSource, chapter: OnlineChapter) {
-  const html = await requestText(chapter.url, sourceHeaders(source.config, chapter.url));
+  const chapterRequest = sourceRequest(chapter.url, source.config);
+  const html = await requestText(chapterRequest.url, chapterRequest.headers, chapterRequest);
   const endpointMatch = html.match(/initTxt\s*\(\s*["']([^"']+)["']/i);
-  const endpoint = endpointMatch ? resolveOptionalUrl(endpointMatch[1], chapter.url) : undefined;
+  const endpoint = endpointMatch ? resolveOptionalUrl(endpointMatch[1], chapterRequest.url) : undefined;
   if (!endpoint) throw new Error("正文接口没有返回可识别的章节地址。");
-  const payload = await requestText(endpoint, sourceHeaders(source.config, chapter.url));
+  const endpointRequest = sourceRequest(endpoint, source.config);
+  const payload = await requestText(endpointRequest.url, endpointRequest.headers, endpointRequest);
   const callback = payload.match(/_txt_call\s*\(\s*([\s\S]*?)\s*\)\s*;?\s*$/i);
   if (!callback) throw new Error("正文接口返回格式与书源规则不一致。");
   let data: { content?: string; replace?: Record<string, string> };
@@ -850,7 +859,7 @@ function renderTemplate(template: string, keyword: string, page: number) {
     /\{\{\s*cookie\.(?:removeCookie|clearCookie)\([^{}]*\)\s*\}\}/gi,
     "",
   );
-  const rendered = withoutSafePrelude
+  const rendered = renderLegadoPagePattern(withoutSafePrelude, page)
     .replace(/\{\{\s*key\s*\}\}/gi, encodeURIComponent(keyword))
     .replace(/\{\{\s*page\s*\}\}/gi, String(page));
   if (/\{\{[\s\S]*?\}\}/.test(rendered)) {
@@ -864,6 +873,8 @@ type SourceRequest = {
   method: string;
   body?: string;
   headers: Record<string, string>;
+  useWebView?: boolean;
+  webViewDelayTime?: number;
 };
 
 function sourceRequest(rendered: string, config: BookSourceConfig): SourceRequest {
@@ -871,6 +882,8 @@ function sourceRequest(rendered: string, config: BookSourceConfig): SourceReques
   let method = "GET";
   let body: string | undefined;
   let extraHeaders: Record<string, string> = {};
+  let useWebView = false;
+  let webViewDelayTime: number | undefined;
 
   const legacyPost = rawUrl.match(/^([\s\S]*?)@post->([\s\S]*)$/i);
   if (legacyPost) {
@@ -885,11 +898,19 @@ function sourceRequest(rendered: string, config: BookSourceConfig): SourceReques
           method?: string;
           body?: string;
           headers?: string | Record<string, string>;
+          webView?: boolean | string;
+          webViewDelayTime?: number | string;
         };
         rawUrl = optionSuffix[1].trim();
         method = (options.method || (options.body ? "POST" : "GET")).toUpperCase();
         body = typeof options.body === "string" ? options.body : undefined;
         extraHeaders = normalizeHeaders(options.headers);
+        useWebView = options.webView === true ||
+          (typeof options.webView === "string" && options.webView.toLowerCase() !== "false");
+        const parsedDelay = Number(options.webViewDelayTime);
+        if (Number.isFinite(parsedDelay) && parsedDelay > 0) {
+          webViewDelayTime = Math.min(parsedDelay, 8000);
+        }
       } catch {
         // Keep the complete URL when the suffix is not valid request JSON.
       }
@@ -908,6 +929,8 @@ function sourceRequest(rendered: string, config: BookSourceConfig): SourceReques
     method,
     body,
     headers,
+    useWebView,
+    webViewDelayTime,
   };
 }
 
@@ -975,6 +998,32 @@ function sourceHeaders(config: BookSourceConfig, referer?: string) {
 }
 
 
+type SourceRulePayload =
+  | { kind: "html"; value: HTMLElement }
+  | { kind: "json"; value: unknown };
+
+function parseSourceRulePayload(responseText: string): SourceRulePayload {
+  const payload = parseLegadoPayload(responseText);
+  return payload.kind === "json"
+    ? payload
+    : { kind: "html", value: parse(payload.value) };
+}
+
+function selectSourceRuleNodes(payload: SourceRulePayload, rule?: string): SourceRulePayload[] {
+  if (!rule) return [];
+  if (payload.kind === "json") {
+    return selectLegadoJsonValues(payload.value, rule).map((value) => ({ kind: "json", value }));
+  }
+  const selector = safeStaticSelector(rule);
+  if (!selector) return [];
+  return selectNodes(payload.value, selector).map((value) => ({ kind: "html", value }));
+}
+
+function extractSourceRule(payload: SourceRulePayload, rule?: string, preserveHtml = false) {
+  return payload.kind === "json"
+    ? extractLegadoJsonValue(payload.value, rule)
+    : extract(payload.value, rule, preserveHtml);
+}
 function safeStaticSelector(rule?: string) {
   if (!rule) return "";
   if (!rule.trim().startsWith("@js:")) return rule;
@@ -992,7 +1041,7 @@ function looksLikeBrowserChallenge(status: number, text: string) {
 async function requestText(
   url: string,
   headers: Record<string, string>,
-  request: { body?: string; method?: string } = {},
+  request: { body?: string; method?: string; useWebView?: boolean; webViewDelayTime?: number } = {},
 ) {
   const requestUrl = secureRequestUrl(url);
   const browserRequest: BookSourceBrowserRequest = {
@@ -1000,8 +1049,14 @@ async function requestText(
     headers,
     body: request.body,
     method: request.method ?? "GET",
+    delayMs: request.webViewDelayTime,
   };
   let lastError: unknown;
+
+  if (request.useWebView) {
+    if (bookSourceBrowserRequestHandler) return bookSourceBrowserRequestHandler(browserRequest);
+    throw new Error("这个书源需要使用内置网页引擎，请在应用中重试。");
+  }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
@@ -1058,8 +1113,9 @@ function waitForSourceRetry() {
 }
 
 function selectNodes(root: HTMLElement, rule: string): HTMLElement[] {
-  for (const alternative of rule.split("||")) {
-    const nodes = selectSelectorPath(root, alternative.trim());
+  for (const alternative of splitLegadoRule(rule, "||")) {
+    const nodes = splitLegadoRule(alternative, "&&")
+      .flatMap((part) => selectSelectorPath(root, part));
     if (nodes.length) return nodes;
   }
   return [];
@@ -1136,9 +1192,11 @@ function normalizeSelector(raw: string) {
 
 function extract(root: HTMLElement, rule?: string, preserveHtml = false): string {
   if (!rule) return "";
-  for (const alternative of rule.split("||")) {
-    const result = extractSingle(root, alternative.trim(), preserveHtml);
-    if (result) return result;
+  for (const alternative of splitLegadoRule(rule, "||")) {
+    const values = splitLegadoRule(alternative, "&&")
+      .map((part) => extractSingle(root, part, preserveHtml))
+      .filter(Boolean);
+    if (values.length) return values.join("\n");
   }
   return "";
 }
@@ -1204,11 +1262,27 @@ function cleanAuthor(value: string) {
 
 function resolveOptionalUrl(value: string, base: string): string | undefined {
   if (!value) return undefined;
+  const decorated = splitRequestDecoratedUrl(value);
   try {
-    return new URL(value, base).toString();
+    return new URL(decorated.url, base).toString() + decorated.suffix;
   } catch {
     return undefined;
   }
+}
+
+function splitRequestDecoratedUrl(value: string) {
+  const legacyPost = value.match(/^([\s\S]*?)@post->([\s\S]*)$/i);
+  if (legacyPost) {
+    return { url: legacyPost[1].trim(), suffix: "@post->" + legacyPost[2] };
+  }
+  const optionSuffix = value.match(/^([\s\S]*?),\s*(\{[\s\S]*\})\s*$/);
+  if (optionSuffix) {
+    try {
+      JSON.parse(optionSuffix[2]);
+      return { url: optionSuffix[1].trim(), suffix: "," + optionSuffix[2] };
+    } catch {}
+  }
+  return { url: value, suffix: "" };
 }
 
 function resolveUrl(value: string, base: string) {

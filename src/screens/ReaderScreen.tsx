@@ -318,11 +318,15 @@ export function ReaderScreen({
   }>();
   const [pageViewportHeight, setPageViewportHeight] = useState(0);
   const [completedCalibrationKey, setCompletedCalibrationKey] = useState("");
+  const [settlementPageIndex, setSettlementPageIndex] = useState<number>();
   const chapterSheetProgress = useRef(new Animated.Value(0)).current;
   const bookmarkScale = useRef(new Animated.Value(1)).current;
   const dragTranslate = useRef(new Animated.Value(0)).current;
+  const settlementOpacity = useRef(new Animated.Value(0)).current;
   const pageAnimatingRef = useRef(false);
   const pendingPageResetRef = useRef<number | undefined>(undefined);
+  const settlementPageIndexRef = useRef<number | undefined>(undefined);
+  const pendingSettlementFrameRef = useRef(0);
   const calibrationSentRef = useRef("");
   const paragraphLayoutsRef = useRef(new Map<number, { y: number; height: number; quote: string }>());
   const paragraphLayoutPageKeyRef = useRef("");
@@ -366,6 +370,7 @@ export function ReaderScreen({
     preferences.horizontalPadding,
     preferences.paragraphSpacing,
   ].join(":");
+  const paginationReady = !onPaginationMeasured || completedCalibrationKey === calibrationKey;
   const handleCalibrationTextLayout = useCallback(
     (event: NativeSyntheticEvent<TextLayoutEventData>) => {
       if (!onPaginationMeasured || pageViewportHeight <= 0) return;
@@ -674,6 +679,10 @@ let cancelled = false;
     pageCacheRef.current.clear();
     paragraphLayoutsRef.current.clear();
     pendingPageResetRef.current = undefined;
+    cancelAnimationFrame(pendingSettlementFrameRef.current);
+    settlementPageIndexRef.current = undefined;
+    settlementOpacity.setValue(0);
+    setSettlementPageIndex(undefined);
     pageAnimatingRef.current = false;
     setPageGestureLocked(false);
     dragTranslate.setValue(0);
@@ -683,7 +692,7 @@ let cancelled = false;
       phase: "ready",
     };
     setPageIndex(nextPage);
-  }, [book.pages.length, dragTranslate, initialPage, pageBookKey]);
+  }, [book.pages.length, dragTranslate, initialPage, pageBookKey, settlementOpacity]);
 
   const getPageParagraphs = useCallback(
     (index: number) => {
@@ -709,6 +718,10 @@ let cancelled = false;
     () => getPageParagraphs(pageIndex + 1),
     [getPageParagraphs, pageIndex],
   );
+  const settlementParagraphs = useMemo(
+    () => settlementPageIndex === undefined ? [] : getPageParagraphs(settlementPageIndex),
+    [getPageParagraphs, settlementPageIndex],
+  );
   const readerFontFamily = getReaderFontFamily(preferences.fontFamily);
   const readerLineHeight = preferences.fontSize * preferences.lineHeight;
   const handleParagraphLayout = useCallback((
@@ -727,6 +740,20 @@ let cancelled = false;
       }
     }
   }, [pageIndex]);
+  const preparePageSettlement = useCallback((next: number) => {
+    cancelAnimationFrame(pendingSettlementFrameRef.current);
+    settlementOpacity.setValue(0);
+    settlementPageIndexRef.current = next;
+    setSettlementPageIndex(next);
+  }, [settlementOpacity]);
+
+  const clearPageSettlement = useCallback(() => {
+    cancelAnimationFrame(pendingSettlementFrameRef.current);
+    settlementOpacity.setValue(0);
+    settlementPageIndexRef.current = undefined;
+    setSettlementPageIndex(undefined);
+  }, [settlementOpacity]);
+
   const finishPageChange = useCallback(
     (next: number) => {
       pageRuntimeRef.current = {
@@ -734,11 +761,23 @@ let cancelled = false;
         currentIndex: next,
         phase: "settling",
       };
-      pendingPageResetRef.current = next;
+      const hasPreparedSettlement = settlementPageIndexRef.current === next;
+      if (hasPreparedSettlement) settlementOpacity.setValue(1);
+      dragTranslate.setValue(0);
+      pendingPageResetRef.current = hasPreparedSettlement ? next : undefined;
       setPageIndex(next);
       onPageChange(next);
+      if (!hasPreparedSettlement) {
+        pageAnimatingRef.current = false;
+        setPageGestureLocked(false);
+        pageRuntimeRef.current = {
+          bookKey: pageBookKey,
+          currentIndex: next,
+          phase: "ready",
+        };
+      }
     },
-    [onPageChange, pageBookKey],
+    [dragTranslate, onPageChange, pageBookKey, settlementOpacity],
   );
 
   const jumpToPageImmediately = useCallback(
@@ -747,6 +786,7 @@ let cancelled = false;
       dragTranslate.stopAnimation();
       dragTranslate.setValue(0);
       pendingPageResetRef.current = undefined;
+      clearPageSettlement();
       pageAnimatingRef.current = false;
       setPageGestureLocked(false);
       pageRuntimeRef.current = {
@@ -757,21 +797,29 @@ let cancelled = false;
       setPageIndex(nextPage);
       onPageChange(nextPage);
     },
-    [book.pages.length, dragTranslate, onPageChange, pageBookKey],
+    [book.pages.length, clearPageSettlement, dragTranslate, onPageChange, pageBookKey],
   );
 
   useLayoutEffect(() => {
     if (pendingPageResetRef.current !== pageIndex) return;
     dragTranslate.setValue(0);
     pendingPageResetRef.current = undefined;
-    pageAnimatingRef.current = false;
-    setPageGestureLocked(false);
-    pageRuntimeRef.current = {
-      bookKey: pageBookKey,
-      currentIndex: pageIndex,
-      phase: "ready",
-    };
-  }, [dragTranslate, pageBookKey, pageIndex]);
+    const firstFrame = requestAnimationFrame(() => {
+      const secondFrame = requestAnimationFrame(() => {
+        clearPageSettlement();
+        pageAnimatingRef.current = false;
+        setPageGestureLocked(false);
+        pageRuntimeRef.current = {
+          bookKey: pageBookKey,
+          currentIndex: pageIndex,
+          phase: "ready",
+        };
+      });
+      pendingSettlementFrameRef.current = secondFrame;
+    });
+    pendingSettlementFrameRef.current = firstFrame;
+    return () => cancelAnimationFrame(pendingSettlementFrameRef.current);
+  }, [clearPageSettlement, dragTranslate, pageBookKey, pageIndex]);
   const selectChapter = useCallback(
     (entry: ChapterEntry) => {
       closeChapterList();
@@ -793,7 +841,12 @@ let cancelled = false;
         ? 0
         : entry.pageIndex;
       if (targetPage === pageIndex) return;
+      if (Math.abs(targetPage - pageIndex) > 1) {
+        jumpToPageImmediately(targetPage);
+        return;
+      }
       const direction = targetPage > pageIndex ? 1 : -1;
+      preparePageSettlement(targetPage);
       pageAnimatingRef.current = true;
       setPageGestureLocked(true);
       pageRuntimeRef.current = {
@@ -811,6 +864,7 @@ let cancelled = false;
       }).start(({ finished }) => {
         if (finished) finishPageChange(targetPage);
         else {
+          clearPageSettlement();
           pageAnimatingRef.current = false;
           setPageGestureLocked(false);
           pageRuntimeRef.current = {
@@ -824,12 +878,15 @@ let cancelled = false;
     [
       book.localChapterIndex,
       book.onlineChapterIndex,
+      clearPageSettlement,
       closeChapterList,
       dragTranslate,
       finishPageChange,
+      jumpToPageImmediately,
       onChapterSelect,
       pageBookKey,
       pageIndex,
+      preparePageSettlement,
       screenWidth,
     ],
   );
@@ -857,15 +914,9 @@ let cancelled = false;
     ],
   );
 
-  const resetPagePosition = useCallback(() => {
-    pageAnimatingRef.current = true;
-    setPageGestureLocked(true);
-    Animated.timing(dragTranslate, {
-      toValue: 0,
-      duration: 150,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
+  const resetPagePosition = useCallback((translationX = 0) => {
+    clearPageSettlement();
+    const settleReset = () => {
       pageAnimatingRef.current = false;
       setPageGestureLocked(false);
       pageRuntimeRef.current = {
@@ -873,11 +924,26 @@ let cancelled = false;
         currentIndex: pageIndex,
         phase: "ready",
       };
-    });
-  }, [dragTranslate, pageBookKey, pageIndex]);
+    };
+    const distanceRatio = Math.min(Math.abs(translationX) / screenWidth, 1);
+    if (distanceRatio < 0.005) {
+      dragTranslate.stopAnimation();
+      dragTranslate.setValue(0);
+      settleReset();
+      return;
+    }
+    pageAnimatingRef.current = true;
+    setPageGestureLocked(true);
+    Animated.timing(dragTranslate, {
+      toValue: 0,
+      duration: Math.max(60, Math.min(200, Math.round(distanceRatio * 240))),
+      easing: Easing.linear,
+      useNativeDriver: true,
+    }).start(settleReset);
+  }, [clearPageSettlement, dragTranslate, pageBookKey, pageIndex, screenWidth]);
   const changePage = useCallback(
     (direction: -1 | 1) => {
-      if (pageAnimatingRef.current) return;
+      if (!paginationReady || pageAnimatingRef.current) return;
       const next = Math.max(0, Math.min(pageIndex + direction, book.pages.length - 1));
       if (next === pageIndex) {
         const canCrossChapter =
@@ -889,10 +955,11 @@ let cancelled = false;
       }
 
       if (preferences.pageTurn === "none") {
-        finishPageChange(next);
+        jumpToPageImmediately(next);
         return;
       }
 
+      preparePageSettlement(next);
       pageAnimatingRef.current = true;
       setPageGestureLocked(true);
       pageRuntimeRef.current = {
@@ -911,6 +978,7 @@ let cancelled = false;
       }).start(({ finished }) => {
         if (finished) finishPageChange(next);
         else {
+          clearPageSettlement();
           pageAnimatingRef.current = false;
           setPageGestureLocked(false);
           pageRuntimeRef.current = {
@@ -927,8 +995,11 @@ let cancelled = false;
       canPreviousChapter,
       dragTranslate,
       finishPageChange,
+      jumpToPageImmediately,
       onChapterBoundary,
       pageIndex,
+      paginationReady,
+      preparePageSettlement,
       preferences.pageTurn,
       resetPagePosition,
       screenWidth,
@@ -1011,7 +1082,11 @@ let cancelled = false;
 
   const onGestureStateChange = useCallback(
     (event: PanGestureHandlerStateChangeEvent) => {
-      if (event.nativeEvent.oldState !== State.ACTIVE || pageAnimatingRef.current) return;
+      if (
+        !paginationReady ||
+        event.nativeEvent.oldState !== State.ACTIVE ||
+        pageAnimatingRef.current
+      ) return;
 
       const { translationX, velocityX } = event.nativeEvent;
       const direction: -1 | 1 = translationX < 0 ? 1 : -1;
@@ -1032,9 +1107,10 @@ let cancelled = false;
       }
 
       if (canTurn && committed) {
+        const next = pageIndex + direction;
+        preparePageSettlement(next);
         pageAnimatingRef.current = true;
         setPageGestureLocked(true);
-        const next = pageIndex + direction;
         pageRuntimeRef.current = {
           bookKey: pageBookKey,
           currentIndex: pageIndex,
@@ -1042,15 +1118,16 @@ let cancelled = false;
           targetIndex: next,
         };
         const remaining = 1 - Math.min(Math.abs(translationX) / screenWidth, 1);
-        const duration = Math.max(110, Math.min(230, Math.round(remaining * 220)));
+        const duration = Math.max(60, Math.min(240, Math.round(remaining * 240)));
         Animated.timing(dragTranslate, {
           duration,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
+          easing: Easing.linear,
           toValue: direction * -screenWidth,
           useNativeDriver: true,
         }).start(({ finished }) => {
           if (finished) finishPageChange(next);
           else {
+            clearPageSettlement();
             pageAnimatingRef.current = false;
             setPageGestureLocked(false);
             pageRuntimeRef.current = {
@@ -1063,15 +1140,18 @@ let cancelled = false;
         return;
       }
 
-      resetPagePosition();
+      resetPagePosition(translationX);
     },
     [
       book.pages.length,
       canNextChapter,
       canPreviousChapter,
+      clearPageSettlement,
       dragTranslate,
       finishPageChange,
       pageIndex,
+      paginationReady,
+      preparePageSettlement,
       onChapterBoundary,
       resetPagePosition,
       screenWidth,
@@ -1244,7 +1324,7 @@ let cancelled = false;
 
         <PanGestureHandler
           activeOffsetX={[-10, 10]}
-          enabled={!pageGestureLocked}
+          enabled={paginationReady && !pageGestureLocked}
           failOffsetY={[-12, 12]}
           hitSlop={{ left: -28 }}
           onGestureEvent={onGestureEvent}
@@ -1339,17 +1419,14 @@ let cancelled = false;
             </Animated.View>
           ) : null}
 
-          <Animated.ScrollView
-            contentContainerStyle={[
-              styles.pageContent,
-              { paddingHorizontal: preferences.horizontalPadding },
-            ]}
-            scrollEnabled={false}
-            showsVerticalScrollIndicator={false}
+          <Animated.View
+            renderToHardwareTextureAndroid={preferences.pageTurn !== "none"}
             style={[
               styles.readingColumn,
+              styles.pageContent,
               {
                 backgroundColor: palette.background,
+                paddingHorizontal: preferences.horizontalPadding,
                 width: readingColumnWidth,
                 transform: [{ translateX: pageTranslate }],
               },
@@ -1368,8 +1445,36 @@ let cancelled = false;
               textAlignment={preferences.textAlignment}
               textColor={palette.text}
             />
+          </Animated.View>
 
-          </Animated.ScrollView>
+          {settlementPageIndex !== undefined ? (
+            <Animated.View
+              pointerEvents="none"
+              renderToHardwareTextureAndroid
+              style={[
+                styles.settlementPage,
+                styles.pageContent,
+                {
+                  backgroundColor: palette.background,
+                  left: (screenWidth - readingColumnWidth) / 2,
+                  opacity: settlementOpacity,
+                  paddingHorizontal: preferences.horizontalPadding,
+                  width: readingColumnWidth,
+                },
+              ]}
+            >
+              <ReaderParagraphPage
+                fontFamily={readerFontFamily}
+                fontSize={preferences.fontSize}
+                lineHeight={readerLineHeight}
+                pageIndex={settlementPageIndex}
+                paragraphSpacing={preferences.paragraphSpacing}
+                paragraphs={settlementParagraphs}
+                textAlignment={preferences.textAlignment}
+                textColor={palette.text}
+              />
+            </Animated.View>
+          ) : null}
 
           {preferences.tapToTurn ? (
             <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
@@ -1436,14 +1541,17 @@ let cancelled = false;
           />
           <View pointerEvents="none" style={styles.glassShine} />
           <Pressable
+            accessibilityLabel={
+              resolvedLanguage === "en"
+                ? pageIndex === 0 && canPreviousChapter ? "Previous chapter" : "Previous page"
+                : pageIndex === 0 && canPreviousChapter ? "上一章" : "上一页"
+            }
             disabled={pageIndex === 0 && !canPreviousChapter}
+            hitSlop={4}
             onPress={() => changePage(-1)}
             style={[styles.pageButton, pageIndex === 0 && !canPreviousChapter && styles.disabled]}
           >
-            <Ionicons name="arrow-back" size={19} color={palette.text} />
-            <Text style={[styles.pageButtonText, { color: palette.text }]}>
-              {pageIndex === 0 && canPreviousChapter ? "上一章" : "上一页"}
-            </Text>
+            <Ionicons name="chevron-back" size={23} color={palette.text} />
           </Pressable>
 
           {preferences.showProgress ? (
@@ -1477,17 +1585,20 @@ let cancelled = false;
           )}
 
           <Pressable
+            accessibilityLabel={
+              resolvedLanguage === "en"
+                ? pageIndex === book.pages.length - 1 && canNextChapter ? "Next chapter" : "Next page"
+                : pageIndex === book.pages.length - 1 && canNextChapter ? "下一章" : "下一页"
+            }
             disabled={pageIndex === book.pages.length - 1 && !canNextChapter}
+            hitSlop={4}
             onPress={() => changePage(1)}
             style={[
               styles.pageButton,
               pageIndex === book.pages.length - 1 && !canNextChapter && styles.disabled,
             ]}
           >
-            <Text style={[styles.pageButtonText, { color: palette.text }]}>
-              {pageIndex === book.pages.length - 1 && canNextChapter ? "下一章" : "下一页"}
-            </Text>
-            <Ionicons name="arrow-forward" size={19} color={palette.text} />
+            <Ionicons name="chevron-forward" size={23} color={palette.text} />
           </Pressable>
         </Animated.View>
 
@@ -1980,6 +2091,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, overflow: "hidden" },
   readingColumn: { alignSelf: "center", flex: 1 },
   adjacentPage: { bottom: 0, position: "absolute", top: 0 },
+  settlementPage: { bottom: 0, position: "absolute", top: 0, zIndex: 2 },
   pageContent: { minHeight: "100%", paddingBottom: 104, paddingTop: 12 },
   paragraph: { fontFamily: "serif", letterSpacing: 0.25 },
   calibrationText: { left: 0, opacity: 0, position: "absolute", top: 0 },
@@ -2028,12 +2140,11 @@ const styles = StyleSheet.create({
   },
   pageButton: {
     alignItems: "center",
-    flexDirection: "row",
-    gap: 5,
-    minWidth: 76,
-    paddingVertical: 12,
+    borderRadius: 18,
+    height: 48,
+    justifyContent: "center",
+    width: 48,
   },
-  pageButtonText: { fontSize: 13, fontWeight: "600" },
   disabled: { opacity: 0.28 },
   progressBlock: { alignItems: "center", flex: 1, paddingHorizontal: 10 },
   progressText: { fontSize: 11, marginBottom: 8 },

@@ -54,6 +54,7 @@ import {
   loadBookInfo,
   loadBookSources,
   loadChapterList,
+  loadChapterContent,
   loadOnlineBooks,
   loadOnlineChapter,
   paginateOnlineText,
@@ -105,6 +106,8 @@ import {
 import { loadReadingGoal, saveReadingGoal } from "./src/services/readingGoal";
 import {
   createWebCaptureBook,
+  createWebCaptureExtraction,
+  mergeWebChapterLinks,
   repaginateWebCaptureBook,
 } from "./src/services/webCapture";
 import {
@@ -1466,7 +1469,17 @@ function AppContent() {
     const created = createWebCaptureBook(extraction);
     const next = importedBooks.some((book) => book.id === created.id)
       ? importedBooks.map((book) =>
-          book.id === created.id ? { ...created, progress: book.progress } : book,
+          book.id === created.id ? {
+            ...created,
+            progress: book.progress,
+            lastOpenedAt: book.lastOpenedAt,
+            coverMode: book.coverMode,
+            coverImageUri: book.coverImageUri,
+            coverColors: book.coverColors,
+            accent: book.accent,
+            darkCover: book.darkCover,
+            webChapterLinks: mergeWebChapterLinks(book.webChapterLinks, created.webChapterLinks),
+          } : book,
         )
       : [...importedBooks, created];
     setImportedBooks(next);
@@ -1474,6 +1487,35 @@ function AppContent() {
     if (!silent) Alert.alert("已加入书架", "《" + created.title + "》已保存在本机。");
   };
 
+  const handleResolveWebPageWithSource = useEvent(async (url: string, title: string) => {
+    let targetHost = "";
+    try { targetHost = new URL(url).hostname.toLowerCase(); } catch { return undefined; }
+    const candidates = sources.filter((source) => {
+      if (!source.enabled || !source.config.ruleContent?.content) return false;
+      try {
+        const sourceHost = new URL(source.config.bookSourceUrl).hostname.toLowerCase();
+        return targetHost === sourceHost || targetHost.endsWith("." + sourceHost) || sourceHost.endsWith("." + targetHost);
+      } catch {
+        return false;
+      }
+    });
+    for (const source of candidates) {
+      try {
+        const content = await loadChapterContent(source, { name: title || "网页章节", url });
+        if (!content.trim()) continue;
+        const cleanTitle = (title || "网页章节").replace(/[\t\n]+/g, " ").trim();
+        return {
+          bookTitle: cleanTitle.replace(/(?:第.{1,16}[章节回卷集部篇]|chapter\s*\d+)[\s\S]*$/i, "").replace(/[-_|].*$/, "").trim() || cleanTitle,
+          title: cleanTitle,
+          content,
+          url,
+        } satisfies WebPageExtraction;
+      } catch {
+        // Continue with another matching source before returning to generic extraction errors.
+      }
+    }
+    return undefined;
+  });
   const handleReadWebCapture = (extraction: WebPageExtraction) => {
     const created = createWebCaptureBook(extraction);
     closeWebReader();
@@ -1607,12 +1649,13 @@ function AppContent() {
   }, []);
 
   const openCapturedWebPage = useEvent((url?: string) => {
-    const target = url || currentBook?.sourceUrl;
+    const extraction = currentBook ? createWebCaptureExtraction(currentBook) : undefined;
+    const target = url || extraction?.tocUrl || extraction?.url || currentBook?.sourceUrl;
     if (!target) {
       Alert.alert("原网页不可用", "这本网页书没有保存原始网址。");
       return;
     }
-    setWebReaderInitialExtraction(undefined);
+    setWebReaderInitialExtraction(extraction);
     setWebReaderInitialUrl(target);
     setWebReaderVisible(true);
   });
@@ -1820,7 +1863,7 @@ function AppContent() {
                     : onlineSession && onlineSession.index > 0
                 )}
                 initialPage={pendingProgress.current[currentBook.id]?.pageIndex ?? 0}
-                key={`${currentBook.id}-${currentBook.localChapterIndex ?? "all"}-${currentBook.paginationVersion ?? 0}`}
+                key={`${currentBook.id}-${currentBook.localChapterIndex ?? "all"}`}
                 onBack={closeReader}
                 onDeleteAnnotation={handleDeleteAnnotation}
                 onSaveAnnotation={handleSaveAnnotation}
@@ -1871,6 +1914,7 @@ function AppContent() {
           onAdd={stableHandleAddWebCapture}
           onClose={closeWebReader}
           onRead={stableHandleReadWebCapture}
+          onResolveSource={handleResolveWebPageWithSource}
           onReaderFontChange={(fontFamily) => stableUpdatePreferences({ fontFamily })}
           visible={webReaderVisible}
         />
@@ -1908,7 +1952,13 @@ function NavItem({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={styles.navItem}>
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={styles.navItem}
+    >
       <View style={styles.navIcon}>
         <Ionicons color={active ? "#F3EEE3" : "#878D86"} name={icon} size={21} />
       </View>

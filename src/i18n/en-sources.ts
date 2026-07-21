@@ -62,6 +62,12 @@ export const enSources: Record<string, string> = {
 
   "浏览并提取当前正文": "Browse and extract the current page",
   "关闭网页寻书": "Close web finder",
+  "网页寻书首页": "Web Finder Home",
+  "后退": "Back",
+  "前进": "Forward",
+  "收藏当前网页": "Favorite This Website",
+  "取消收藏网页": "Remove Website Favorite",
+  "正在整理正文": "Preparing Reader Mode",
   "输入网址、书名或作者": "Enter a URL, title, or author",
   "在网页中寻找下一本书": "Find your next book on the web",
   "循着文字，去找下一本书": "Follow the words to your next book",
@@ -167,4 +173,13 @@ export const enSources: Record<string, string> = {
   "暂时无法把这个网页加入书架。": "This page could not be added to your library.",
 
   "搜索喜欢的书，加入书架后即可阅读": "Search for a book and add it to your library to start reading",
-};
+  "请先打开网页目录": "Open the book's chapter page first.",
+  "这一页没有识别到章节目录": "No chapter list was recognized on this page.",
+  "章节目录提取失败": "Chapter list extraction failed.",
+  "没有识别到章节目录": "No Chapter List Found",
+  "这一页没有找到清晰的章节入口。": "No clear chapter links were found on this page.",
+  "从原网页刷新目录": "Refresh from Web Chapter List",
+  "整理章节目录": "Collect Chapter List",
+  "正在整理网页目录": "Collecting the web chapter list",
+  "{count} 章目录 · 已整理 {loaded} 章": "{count} chapters · {loaded} ready",
+  "未命名章节": "Untitled Chapter",};

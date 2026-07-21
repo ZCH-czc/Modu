@@ -160,7 +160,7 @@ export function BookSourceBrowserBridge() {
         });
       });
   }
-  setTimeout(function () { run(0); }, 700);
+  setTimeout(function () { run(0); }, ${Math.max(300, Math.min(active.request.delayMs ?? 700, 8000))});
 })();
 true;
 `;

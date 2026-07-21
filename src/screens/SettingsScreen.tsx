@@ -212,9 +212,9 @@ const exportAnnotations = async () => {
     <SafeAreaView style={styles.safe} edges={[]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerCopy}>
             <Text style={styles.eyebrow}>字里行间</Text>
-            <Text style={styles.heading}>阅读偏好</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.68} numberOfLines={1} style={styles.heading}>阅读偏好</Text>
           </View>
           <View style={styles.seal}><Text style={styles.sealText}>墨</Text></View>
         </View>
@@ -500,7 +500,7 @@ const exportAnnotations = async () => {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.7"
+            value="v1.5.8"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -1045,7 +1045,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.7</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.8</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>
@@ -1060,7 +1060,8 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
 const styles = StyleSheet.create({
   safe: { backgroundColor: "#F4F1EA", flex: 1 },
   content: { alignSelf: "center", maxWidth: 720, paddingBottom: 132, paddingHorizontal: 20, paddingTop: 14, width: "100%" },
-  header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingRight: 24 },
+  headerCopy: { flex: 1, marginRight: 12, minWidth: 0 },
   eyebrow: { color: "#8B8A82", fontSize: 8, fontWeight: "900", letterSpacing: 1.8 },
   heading: { color: "#292D28", fontFamily: "serif", fontSize: 29, fontWeight: "800" },
   seal: {

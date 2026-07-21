@@ -58,6 +58,7 @@ export interface Book {
   coverImageUri?: string;
   sourceUrl?: string;
   webChapters?: WebChapterExtraction[];
+  webChapterLinks?: WebChapterLink[];
   webNextUrl?: string;
   webCurrentChapterIndex?: number;
   localChapters?: Array<{ title: string; text: string }>;
@@ -72,10 +73,13 @@ export interface Book {
   fullyDownloaded?: boolean;
 }
 
-export interface WebChapterExtraction {
+export interface WebChapterLink {
   title: string;
-  content: string;
   url: string;
+}
+
+export interface WebChapterExtraction extends WebChapterLink {
+  content: string;
 }
 
 export interface WebPageExtraction {
@@ -87,6 +91,7 @@ export interface WebPageExtraction {
   nextUrl?: string;
   tocUrl?: string;
   chapters?: WebChapterExtraction[];
+  chapterLinks?: WebChapterLink[];
 }
 
 export interface ReaderPreferences {

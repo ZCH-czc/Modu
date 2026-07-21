@@ -3,7 +3,7 @@ import {
   paginateTextForReader,
   type ReaderPaginationLayout,
 } from "./readerPagination";
-import type { Book, WebChapterExtraction, WebPageExtraction } from "../types";
+import type { Book, WebChapterExtraction, WebChapterLink, WebPageExtraction } from "../types";
 
 export function createWebCaptureBook(extraction: WebPageExtraction, pageTarget = 520): Book {
   const chapters = extraction.chapters?.length
@@ -12,6 +12,10 @@ export function createWebCaptureBook(extraction: WebPageExtraction, pageTarget =
   const currentIndex = Math.max(0, chapters.findIndex((chapter) => chapter.url === extraction.url));
   const currentChapter = chapters[currentIndex] ?? chapters[0];
   const stableUrl = chapters[0]?.url || extraction.url;
+  const chapterLinks = mergeWebChapterLinks(
+    extraction.chapterLinks,
+    chapters.map(({ title, url }) => ({ title, url })),
+  );
   const pages: string[] = [];
   const pageTitles: string[] = [];
 
@@ -37,6 +41,7 @@ export function createWebCaptureBook(extraction: WebPageExtraction, pageTarget =
     sourceUrl: stableUrl,
     tocUrl: extraction.tocUrl,
     webChapters: chapters,
+    webChapterLinks: chapterLinks,
     webNextUrl: extraction.nextUrl,
     webCurrentChapterIndex: currentIndex,
     importedAt: Date.now(),
@@ -75,9 +80,28 @@ export function createWebCaptureExtraction(book: Book): WebPageExtraction | unde
     nextUrl: book.webNextUrl,
     tocUrl: book.tocUrl,
     chapters,
+    chapterLinks: mergeWebChapterLinks(book.webChapterLinks, chapters),
   };
 }
 
+
+export function mergeWebChapterLinks(
+  ...groups: Array<ReadonlyArray<WebChapterLink> | undefined>
+): WebChapterLink[] {
+  const links = new Map<string, WebChapterLink>();
+  for (const group of groups) {
+    for (const item of group ?? []) {
+      const url = item.url?.trim();
+      if (!url || !/^https?:\/\//i.test(url)) continue;
+      const existing = links.get(url);
+      links.set(url, {
+        title: item.title?.trim() || existing?.title || "未命名章节",
+        url,
+      });
+    }
+  }
+  return [...links.values()];
+}
 function recoverLegacyChapters(book: Book): WebChapterExtraction[] {
   if (!book.pages.length) return [];
   const chapters: WebChapterExtraction[] = [];

@@ -6,6 +6,25 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-07-21
+
+### Added
+- Discover and persist web novel chapter catalogs, lazily extract unopened chapters, and restore saved web-reading sessions when returning to the original site.
+- Fall back to an enabled same-domain book source when generic Web Reader extraction cannot identify readable chapter text.
+- Parse safe Legado JSON and JSONP book-source responses across search, book details, chapter catalogs, and chapter content.
+- Support common JSONPath properties, wildcards, recursive fields, negative indexes, slices, unions, alternatives, interpolation, and regex replacements without executing source JavaScript.
+- Support Legado page-list URL templates such as `<first,next>` while preserving existing request options and browser fallback behavior.
+
+### Changed
+- Simplify Web Finder, book-source management, and native reader controls into compact icon-first toolbars with translated accessibility labels.
+- Keep primary Library and Settings navigation labels while exposing correct tab roles and selected states to Android accessibility services.
+
+### Fixed
+- Prevent English settings headings from pushing the app seal outside narrow phone layouts.
+- Prevent page-turn flashes by keeping the destination page pre-rendered through the state commit, then releasing the frozen frame only after the new page has painted.
+- Keep pagination calibration from remounting the reader or accepting gestures before the measured layout is ready.
+- Settle completed and cancelled swipe gestures by remaining distance with linear motion, avoiding sticky short returns and abrupt end-of-page deceleration.
+
 ## [1.5.7] - 2026-07-20
 
 ### Changed

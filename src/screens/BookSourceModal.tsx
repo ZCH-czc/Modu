@@ -4,6 +4,7 @@ import { useEffect,
   useMemo,
   useState } from "react";
 import {
+  type AccessibilityRole,
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
@@ -341,11 +342,12 @@ export function BookSourceModal({
                         <Text style={styles.sectionHint}>选择书源并输入书名或作者</Text>
                       </View>
                       <MotionPressable
+                        accessibilityLabel={t("管理书源")}
+                        accessibilityRole="button"
                         onPress={() => setManagerVisible(true)}
                         style={styles.manageLink}
                       >
-                        <Ionicons color="#60766A" name="settings-outline" size={15} />
-                        <Text style={styles.manageLinkText}>管理</Text>
+                        <Ionicons color="#60766A" name="settings-outline" size={18} />
                       </MotionPressable>
                     </View>
 
@@ -855,12 +857,14 @@ function MotionPressable({
   onPress,
   style,
   accessibilityLabel,
+  accessibilityRole,
 }: {
   children: React.ReactNode;
   disabled?: boolean;
   onPress: () => void;
   style: object | object[];
   accessibilityLabel?: string;
+  accessibilityRole?: AccessibilityRole;
 }) {
   const progress = useSharedValue(0);
   const animatedStyle = useAnimatedStyle(() => ({
@@ -870,6 +874,7 @@ function MotionPressable({
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
+      accessibilityRole={accessibilityRole}
       disabled={disabled}
       onPress={onPress}
       onPressIn={() => {
@@ -1042,13 +1047,11 @@ const styles = StyleSheet.create({
   manageLink: {
     alignItems: "center",
     backgroundColor: "#E8ECE8",
-    borderRadius: 12,
-    flexDirection: "row",
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: 13,
+    height: 40,
+    justifyContent: "center",
+    width: 40,
   },
-  manageLinkText: { color: "#60766A", fontSize: 10, fontWeight: "800" },
   sourcePicker: { gap: 8, paddingBottom: 11, paddingTop: 15, paddingRight: 18 },
   sourceChip: {
     alignItems: "center",
