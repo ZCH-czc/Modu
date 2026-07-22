@@ -16,18 +16,18 @@ export type PendingChangelog = {
 };
 
 const RELEASE_NOTES: Record<string, ChangelogEntry[]> = {
-  "1.5.12": [
+  "1.5.13": [
     {
-      title: "引导更清楚",
-      detail: "重新绘制功能演示，让书架、网页寻书与阅读器的用法一眼可见。",
+      title: "字句更有余韵",
+      detail: "重新润色八页功能引导，让操作说明清楚之余，也保留墨读安静克制的气息。",
     },
     {
-      title: "阅读更从容",
-      detail: "继续优化本地与网页阅读的预排版、懒加载和翻页衔接。",
+      title: "页面更像墨读",
+      detail: "统一书架、网页寻书、空状态与设置页的说明文案，让每一处提示都属于同一种声音。",
     },
     {
-      title: "诊断更直接",
-      detail: "新增性能检测，可记录掉帧时所在页面、组件区域与帧率并导出日志。",
+      title: "中英文一同落笔",
+      detail: "同步调整英文表达，并在手机与平板尺寸下逐页校验引导布局。",
     },
   ],
 };
@@ -40,8 +40,8 @@ export async function loadPendingChangelog(): Promise<PendingChangelog | undefin
     version: CURRENT_APP_VERSION,
     entries: RELEASE_NOTES[CURRENT_APP_VERSION] ?? [
       {
-        title: "这一页又添了新墨",
-        detail: "这个版本带来了一些体验改进与问题修复。",
+        title: "新一页，墨迹初干",
+        detail: "这一版收拢了细小的改进，也替几处不顺手的地方理了理纸页。",
       },
     ],
   };

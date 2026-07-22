@@ -6,6 +6,13 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.13] - 2026-07-22
+
+### Changed
+- Rewrite all eight animated onboarding pages with a calmer, more literary voice while retaining clear instructions.
+- Align descriptive copy across the Library, Web Finder, Settings, empty states, and the in-app changelog.
+- Synchronize English translations and validate every guide page at phone and tablet widths in both languages.
+
 ## [1.5.12] - 2026-07-22
 
 ### Added

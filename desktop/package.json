@@ -1,6 +1,6 @@
 {
   "name": "modu-reader-desktop",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "description": "Modu desktop reader for Windows.",
   "main": "main.cjs",
   "private": true

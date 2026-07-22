@@ -226,7 +226,7 @@ const exportAnnotations = async () => {
             <Ionicons name="leaf-outline" size={24} color="#F3DFC0" />
           </View>
           <View style={styles.profileText}>
-            <Text style={styles.profileName}>愿每一次翻页，都有清风作伴</Text>
+            <Text style={styles.profileName}>愿每一次翻页，都有清风经过</Text>
           </View>
         </View>
 
@@ -512,7 +512,7 @@ const exportAnnotations = async () => {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.12"
+            value="v1.5.13"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -943,7 +943,7 @@ function LibraryModal({
             {!books.length ? (
               <View style={styles.empty}>
                 <Ionicons name="folder-open-outline" size={36} color="#B0A99E" />
-                <Text style={styles.emptyText}>还没有导入本地书籍</Text>
+                <Text style={styles.emptyText}>还没有本地藏书，去迎一本回来吧</Text>
               </View>
             ) : books.map((book) => (
               <View key={book.id} style={styles.bookRow}>
@@ -1059,7 +1059,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.12</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.13</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>

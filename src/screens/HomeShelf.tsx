@@ -335,9 +335,9 @@ export function HomeShelf({
             </View>
             <View style={styles.quoteCopy}>
               <Text style={styles.quoteText}>
-                {isTablet ? "翻一页人间，藏一寸光阴" : "一页人间，一寸光阴"}
+                {isTablet ? "翻一页人间，收一寸光阴" : "一页人间，一寸光阴"}
               </Text>
-              {isTablet ? <Text style={styles.quoteSubtext}>让故事落座，让心绪归静</Text> : null}
+              {isTablet ? <Text style={styles.quoteSubtext}>让故事落座，也让心绪归静</Text> : null}
             </View>
           </View>
         </LinearGradient>
@@ -841,8 +841,8 @@ const ImportCard = memo(function ImportCard({
           </View>
         </View>
         <View style={styles.importCopy}>
-          <Text style={styles.emptyTitle}>为书架添一册新故事</Text>
-          <Text style={styles.emptyText}>从 EPUB 或 PDF，拾一段安静时光</Text>
+          <Text style={styles.emptyTitle}>让新故事在书架落座</Text>
+          <Text style={styles.emptyText}>从 EPUB、TXT 或 PDF，迎一段安静时光</Text>
         </View>
         <View style={styles.importArrow}>
           <Ionicons name="cloud-upload-outline" color="#F6F0E5" size={20} />
