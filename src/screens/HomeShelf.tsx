@@ -20,6 +20,8 @@ import { Text, TextInput, useI18n } from "../i18n";
 import type { DimensionValue } from "react-native";
 
 import { IOSPopupModal } from "../components/IOSPopupModal";
+import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
+import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import type { Book } from "../types";
 import {
   defaultLibraryViewPreferences,
@@ -40,6 +42,8 @@ type HomeShelfProps = {
   onRename: (book: Book, title: string) => Promise<void>;
   onPickCoverImage: (book: Book) => Promise<boolean>;
   onSetCoverColors: (book: Book, colors: readonly [string, string]) => Promise<void>;
+  guideEnabled?: boolean;
+  guideResetToken?: number;
 };
 
 type ShelfListItem =
@@ -74,6 +78,8 @@ export function HomeShelf({
   onRename,
   onPickCoverImage,
   onSetCoverColors,
+  guideEnabled = false,
+  guideResetToken = 0,
 }: HomeShelfProps) {
   const { resolvedLanguage } = useI18n();
   const { width } = useWindowDimensions();
@@ -91,6 +97,15 @@ export function HomeShelf({
   const [coverColorsValue, setCoverColorsValue] = useState<[string, string]>(["#365447", "#182A22"]);
   const [activeColor, setActiveColor] = useState<0 | 1>(0);
   const [savingCover, setSavingCover] = useState(false);
+  const webButtonRef = useRef<View>(null);
+  const sourceButtonRef = useRef<View>(null);
+  const importButtonRef = useRef<View>(null);
+  const shelfGuide = useSpotlightGuide("shelf-actions-v1", guideEnabled, guideResetToken);
+  const shelfGuideSteps = useMemo<SpotlightStep[]>(() => [
+    { key: "web", target: webButtonRef, icon: "compass-outline", title: "网页寻书", description: "在内置网页中搜索或打开小说网站。找到正文后，可以进入阅读模式，也可以收藏到书架。", placement: "below" },
+    { key: "sources", target: sourceButtonRef, icon: "globe-outline", title: "在线书源", description: "导入书源规则后，可以直接搜索书名、查看目录，并按章节开始阅读。", placement: "below" },
+    { key: "import", target: importButtonRef, icon: "add", title: "导入本地书", description: "从设备中选择 EPUB、TXT 或 PDF。解析过程会显示进度，完成后会出现在书架。", placement: "below" },
+  ], []);
 
 
   useEffect(() => {
@@ -196,7 +211,13 @@ export function HomeShelf({
     } finally {
       setSavingCover(false);
     }
-  }, [coverBook, onPickCoverImage, savingCover]);  const isTablet = width >= 700;
+  }, [coverBook, onPickCoverImage, savingCover]);
+  const isTablet = width >= 700;
+  const colorChoiceColumns = isTablet ? 10 : 5;
+  const colorChoiceRows = Array.from(
+    { length: Math.ceil(colorChoices.length / colorChoiceColumns) },
+    (_, index) => colorChoices.slice(index * colorChoiceColumns, (index + 1) * colorChoiceColumns),
+  );
   const columns = width >= 1120 ? 3 : isTablet ? 2 : 1;
   const contentWidth = Math.min(width, 1180);
   const contentPadding = isTablet ? 28 : 18;
@@ -275,21 +296,27 @@ export function HomeShelf({
           <View style={styles.headerActions}>
             <Pressable
               accessibilityLabel="网页寻书"
+              collapsable={false}
               onPress={onBrowseWeb}
+              ref={webButtonRef}
               style={({ pressed }) => [styles.roundButton, pressed && styles.buttonPressed]}
             >
               <Ionicons name="compass-outline" color="#405E4F" size={20} />
             </Pressable>
             <Pressable
               accessibilityLabel="搜索在线书源"
+              collapsable={false}
               onPress={onOnline}
+              ref={sourceButtonRef}
               style={({ pressed }) => [styles.roundButton, pressed && styles.buttonPressed]}
             >
               <Ionicons name="globe-outline" color="#405E4F" size={19} />
             </Pressable>
             <Pressable
               accessibilityLabel="导入电子书"
+              collapsable={false}
               onPress={onImport}
+              ref={importButtonRef}
               style={({ pressed }) => [styles.importButton, pressed && styles.buttonPressed]}
             >
               <Ionicons name="add" color="#F7F1E6" size={20} />
@@ -554,7 +581,7 @@ export function HomeShelf({
       >
         <ScrollView contentContainerStyle={styles.coverEditorContent} showsVerticalScrollIndicator={false} style={styles.coverEditorCard}>
           <View style={styles.coverEditorHeader}>
-            <View style={styles.renameIcon}><Ionicons name="color-palette-outline" color="#486555" size={21} /></View>
+            <View style={[styles.renameIcon, styles.coverEditorHeaderIcon]}><Ionicons name="color-palette-outline" color="#486555" size={21} /></View>
             <View style={styles.coverEditorHeading}>
               <Text style={styles.renameTitle}>装点书封</Text>
               <Text style={styles.renameHint}>为故事挑两种颜色，或留下一幅画</Text>
@@ -607,16 +634,19 @@ export function HomeShelf({
           </View>
 
           <View style={styles.colorGrid}>
-            {colorChoices.map((color) => (
-              <Pressable
-                accessibilityLabel={`选择颜色 ${color}`}
-                key={color}
-                onPress={() => chooseColor(color)}
-                style={[styles.colorChoice, { backgroundColor: color }]}
-              />
+            {colorChoiceRows.map((row, rowIndex) => (
+              <View key={rowIndex} style={[styles.colorGridRow, isTablet && styles.colorGridRowTablet]}>
+                {row.map((color) => (
+                  <Pressable
+                    accessibilityLabel={"选择颜色 " + color}
+                    key={color}
+                    onPress={() => chooseColor(color)}
+                    style={[styles.colorChoice, { backgroundColor: color }]}
+                  />
+                ))}
+              </View>
             ))}
           </View>
-
           <View style={styles.renameActions}>
             <Pressable onPress={() => setCoverVisible(false)} style={styles.renameCancel}><Text style={styles.renameCancelText}>取消</Text></Pressable>
             <Pressable
@@ -630,6 +660,7 @@ export function HomeShelf({
           </View>
         </ScrollView>
       </IOSPopupModal>
+      <SpotlightTour onComplete={shelfGuide.complete} steps={shelfGuideSteps} visible={shelfGuide.visible} />
     </View>
   );
 }
@@ -1338,11 +1369,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     elevation: 16,
     maxWidth: 460,
-    padding: 22,
     width: "100%",
   },
   coverEditorContent: { padding: 22 },
   coverEditorHeader: { alignItems: "center", flexDirection: "row", gap: 13 },
+  coverEditorHeaderIcon: { marginBottom: 0 },
   coverEditorHeading: { flex: 1 },
   coverEditorPreviewRow: { flexDirection: "row", gap: 18, marginTop: 18 },
   coverEditorPreview: {
@@ -1369,7 +1400,9 @@ const styles = StyleSheet.create({
   colorSlotDot: { borderColor: "#FFFFFF", borderRadius: 10, borderWidth: 2, height: 20, width: 20 },
   colorSlotLabel: { color: "#68716B", fontSize: 10, fontWeight: "700", marginLeft: 7 },
   colorHexInput: { color: "#33413A", flex: 1, fontSize: 11, fontWeight: "800", marginLeft: 5, paddingHorizontal: 0, textAlign: "right" },
-  colorGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 15 },
+  colorGrid: { gap: 9, marginTop: 15 },
+  colorGridRow: { flexDirection: "row", gap: 9, justifyContent: "center" },
+  colorGridRowTablet: { gap: 4 },
   colorChoice: { borderColor: "#FFFFFF", borderRadius: 13, borderWidth: 2, elevation: 1, height: 30, width: 30 },  renameBackdrop: { alignItems: "center", backgroundColor: "rgba(25,32,28,0.48)", flex: 1, justifyContent: "center", padding: 26 },
   renameCard: { backgroundColor: "#FAF8F2", borderColor: "#FFFFFFB8", borderRadius: 26, borderWidth: 1, elevation: 16, maxWidth: 420, padding: 22, width: "100%" },
   renameIcon: { alignItems: "center", backgroundColor: "#E6EEE8", borderRadius: 16, height: 42, justifyContent: "center", marginBottom: 15, width: 42 },

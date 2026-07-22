@@ -49,6 +49,8 @@ import type {
 } from "../types";
 import { getReaderFontFamily } from "../utils/readerFonts";
 import { IOSPopupModal } from "../components/IOSPopupModal";
+import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
+import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import {
   createMeasuredReaderPaginationLayout,
   type ReaderPaginationLayout,
@@ -79,6 +81,8 @@ type ReaderScreenProps = {
   onOpenOriginal?: (url?: string) => void;
   downloadProgress?: { completed: number; total: number };
   onPaginationMeasured?: (layout: ReaderPaginationLayout) => void;
+  guideEnabled?: boolean;
+  guideResetToken?: number;
 };
 
 type ChapterEntry = {
@@ -296,6 +300,8 @@ export function ReaderScreen({
   onOpenOriginal,
   downloadProgress,
   onPaginationMeasured,
+  guideEnabled = false,
+  guideResetToken = 0,
 }: ReaderScreenProps) {
   const { resolvedLanguage } = useI18n();
   const [pageIndex, setPageIndex] = useState(() =>
@@ -331,6 +337,23 @@ export function ReaderScreen({
   const paragraphLayoutsRef = useRef(new Map<number, { y: number; height: number; quote: string }>());
   const paragraphLayoutPageKeyRef = useRef("");
   const longPressConsumedRef = useRef(false);
+  const gestureGuideRef = useRef<View>(null);
+  const backGuideRef = useRef<View>(null);
+  const bookmarkGuideRef = useRef<View>(null);
+  const chapterGuideRef = useRef<View>(null);
+  const localReaderGuide = useSpotlightGuide("local-reader-v1", guideEnabled, guideResetToken);
+  const localReaderGuideSteps = useMemo<SpotlightStep[]>(() => [
+    { key: "gestures", target: gestureGuideRef, icon: "hand-left-outline", title: "用手势翻动书页", description: "向左或向右滑动切换页面；也可以点击屏幕两侧翻页。轻点中央会显示或隐藏阅读菜单。" },
+    { key: "chapters", target: chapterGuideRef, icon: "list-outline", title: "从这里打开章节", description: "章节目录支持直接跳转；本地 EPUB 与 TXT 还可以在整本书中搜索一句话。", placement: "below" },
+    { key: "bookmark", target: bookmarkGuideRef, icon: "bookmark-outline", title: "留下书签与批注", description: "点这里收藏当前页。长按正文可以划线，并写下只保存在本机的批注。", placement: "below" },
+    { key: "back", target: backGuideRef, icon: "arrow-back", title: "回到书架", description: "阅读进度会自动保存。返回时会沿着进入的方向回到书架。", placement: "below" },
+  ], []);
+
+  useEffect(() => {
+    if (!localReaderGuide.visible) return;
+    setChapterVisible(false);
+    setControlsVisible(true);
+  }, [localReaderGuide.visible]);
   const pageCacheRef = useRef(new Map<number, string[]>());
   const pageBookKey = `${book.id}:${book.localChapterIndex ?? book.onlineChapterIndex ?? "all"}:${book.pages.length}:${book.paginationVersion ?? 0}`;
   const paragraphLayoutPageKey = `${pageBookKey}:${pageIndex}`;
@@ -356,7 +379,7 @@ export function ReaderScreen({
   ).current;
   const palette = themes[preferences.theme];
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const readingColumnWidth = Math.min(screenWidth, 760);
+  const readingColumnWidth = Math.min(screenWidth, screenWidth >= 600 ? 560 : 760);
   const chromeWidth = Math.min(screenWidth - 20, 860);
   const chromeLeft = (screenWidth - chromeWidth) / 2;
   const chapterSheetWidth = Math.min(screenWidth, 760);
@@ -822,19 +845,19 @@ let cancelled = false;
   }, [clearPageSettlement, dragTranslate, pageBookKey, pageIndex]);
   const selectChapter = useCallback(
     (entry: ChapterEntry) => {
-      closeChapterList();
+      closeChapterListImmediately();
       if (
         entry.localIndex !== undefined &&
         entry.localIndex !== (book.localChapterIndex ?? 0)
       ) {
-        onChapterSelect?.(entry.localIndex, entry.pageIndex);
+        requestAnimationFrame(() => onChapterSelect?.(entry.localIndex!, entry.pageIndex));
         return;
       }
       if (
         entry.onlineIndex !== undefined &&
         entry.onlineIndex !== (book.onlineChapterIndex ?? 0)
       ) {
-        onChapterSelect?.(entry.onlineIndex);
+        requestAnimationFrame(() => onChapterSelect?.(entry.onlineIndex!));
         return;
       }
       const targetPage = entry.onlineIndex !== undefined || entry.localIndex !== undefined
@@ -856,7 +879,7 @@ let cancelled = false;
         targetIndex: targetPage,
       };
       dragTranslate.setValue(0);
-      Animated.timing(dragTranslate, {
+      requestAnimationFrame(() => Animated.timing(dragTranslate, {
         duration: 240,
         easing: Easing.bezier(0.22, 1, 0.36, 1),
         toValue: direction * -screenWidth,
@@ -873,13 +896,13 @@ let cancelled = false;
             phase: "ready",
           };
         }
-      });
+      }));
     },
     [
       book.localChapterIndex,
       book.onlineChapterIndex,
       clearPageSettlement,
-      closeChapterList,
+      closeChapterListImmediately,
       dragTranslate,
       finishPageChange,
       jumpToPageImmediately,
@@ -970,7 +993,7 @@ let cancelled = false;
       };
       dragTranslate.stopAnimation();
       dragTranslate.setValue(0);
-      Animated.timing(dragTranslate, {
+      requestAnimationFrame(() => Animated.timing(dragTranslate, {
         duration: preferences.pageTurn === "cover" ? 270 : 245,
         easing: Easing.bezier(0.22, 1, 0.36, 1),
         toValue: direction * -screenWidth,
@@ -987,7 +1010,7 @@ let cancelled = false;
             phase: "ready",
           };
         }
-      });
+      }));
     },
     [
       book.pages.length,
@@ -1119,7 +1142,7 @@ let cancelled = false;
         };
         const remaining = 1 - Math.min(Math.abs(translationX) / screenWidth, 1);
         const duration = Math.max(60, Math.min(240, Math.round(remaining * 240)));
-        Animated.timing(dragTranslate, {
+        requestAnimationFrame(() => Animated.timing(dragTranslate, {
           duration,
           easing: Easing.linear,
           toValue: direction * -screenWidth,
@@ -1136,7 +1159,7 @@ let cancelled = false;
               phase: "ready",
             };
           }
-        });
+        }));
         return;
       }
 
@@ -1224,6 +1247,7 @@ let cancelled = false;
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={[styles.safeArea, { backgroundColor: palette.background }]}>
       <View style={styles.container}>
+        <View collapsable={false} pointerEvents="none" ref={gestureGuideRef} style={styles.guideGestureTarget} />
         <Animated.View
           pointerEvents={controlsVisible ? "auto" : "none"}
           renderToHardwareTextureAndroid
@@ -1255,7 +1279,7 @@ let cancelled = false;
             ]}
           />
           <View pointerEvents="none" style={styles.glassShine} />
-          <Pressable onPress={onBack} style={styles.iconButton}>
+          <Pressable collapsable={false} onPress={onBack} ref={backGuideRef} style={styles.iconButton}>
             <Ionicons name="chevron-back" size={24} color={palette.text} />
           </Pressable>
           <View style={styles.headerText}>
@@ -1278,7 +1302,9 @@ let cancelled = false;
             ) : null}
 <Pressable
               accessibilityLabel={currentBookmark ? "移除本页书签" : "添加本页书签"}
+              collapsable={false}
               onPress={toggleCurrentBookmark}
+              ref={bookmarkGuideRef}
               style={styles.iconButton}
             >
               <Animated.View style={{ transform: [{ scale: bookmarkScale }] }}>
@@ -1289,7 +1315,7 @@ let cancelled = false;
                 />
               </Animated.View>
             </Pressable>
-            <Pressable accessibilityLabel="章节目录" onPress={openChapterList} style={styles.iconButton}>
+            <Pressable accessibilityLabel="章节目录" collapsable={false} onPress={openChapterList} ref={chapterGuideRef} style={styles.iconButton}>
               <Ionicons name="list-outline" size={23} color={palette.text} />
             </Pressable>
             {onDownloadAll ? (
@@ -2047,6 +2073,7 @@ let cancelled = false;
             </View>
           </KeyboardAvoidingView>
         </IOSPopupModal>
+        <SpotlightTour onComplete={localReaderGuide.complete} steps={localReaderGuideSteps} visible={localReaderGuide.visible} />
       </View>
     </SafeAreaView>
   );
@@ -2062,10 +2089,10 @@ function splitReaderParagraphs(page: string) {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
+  guideGestureTarget: { height: 150, left: "32%", position: "absolute", right: "32%", top: "38%" },
   header: {
     alignItems: "center",
     borderRadius: 20,
-    borderWidth: 1,
     flexDirection: "row",
     height: 64,
     left: 10,
@@ -2092,7 +2119,7 @@ const styles = StyleSheet.create({
   readingColumn: { alignSelf: "center", flex: 1 },
   adjacentPage: { bottom: 0, position: "absolute", top: 0 },
   settlementPage: { bottom: 0, position: "absolute", top: 0, zIndex: 2 },
-  pageContent: { minHeight: "100%", paddingBottom: 104, paddingTop: 12 },
+  pageContent: { minHeight: "100%", paddingBottom: 64, paddingTop: 36 },
   paragraph: { fontFamily: "serif", letterSpacing: 0.25 },
   calibrationText: { left: 0, opacity: 0, position: "absolute", top: 0 },
   leftTapArea: {
@@ -2119,7 +2146,6 @@ const styles = StyleSheet.create({
   footer: {
     alignItems: "center",
     borderRadius: 22,
-    borderWidth: 1,
     bottom: 10,
     flexDirection: "row",
     left: 10,
@@ -2163,7 +2189,6 @@ const styles = StyleSheet.create({
   chapterSheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    borderWidth: 1,
     bottom: 0,
     overflow: "hidden",
     paddingBottom: 8,

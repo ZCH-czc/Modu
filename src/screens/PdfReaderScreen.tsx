@@ -20,6 +20,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
 import { useAppAlert } from "../components/AppDialog";
+import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
+import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import type { Book, ReaderPreferences } from "../types";
 import {
   setVolumeKeyTurnsEnabled,
@@ -31,17 +33,28 @@ type PdfReaderScreenProps = {
   book: Book;
   preferences: ReaderPreferences;
   onBack: () => void;
+  guideEnabled?: boolean;
+  guideResetToken?: number;
 };
 
 export function PdfReaderScreen({
   book,
   preferences,
   onBack,
+  guideEnabled = false,
+  guideResetToken = 0,
 }: PdfReaderScreenProps) {
   const Alert = useAppAlert();
   const webRef = useRef<WebView>(null);
   const [base64, setBase64] = useState<string>();
   const [loading, setLoading] = useState(true);
+  const backGuideRef = useRef<View>(null);
+  const contentGuideRef = useRef<View>(null);
+  const pdfGuide = useSpotlightGuide("pdf-reader-v1", guideEnabled, guideResetToken);
+  const pdfGuideSteps = useMemo<SpotlightStep[]>(() => [
+    { key: "document", target: contentGuideRef, icon: "document-text-outline", title: "阅读 PDF 文档", description: "上下滑动浏览页面。墨读只保留当前页附近的渲染结果，长文档也不会一次占满内存。" },
+    { key: "back", target: backGuideRef, icon: "arrow-back", title: "返回书架", description: "点这里离开 PDF。再次打开时，文件仍会从本地读取，不会上传。", placement: "below" },
+  ], []);
 
   useEffect(() => {
     if (preferences.keepScreenAwake) {
@@ -203,8 +216,9 @@ export function PdfReaderScreen({
 
   return (
     <SafeAreaView edges={["top", "right", "bottom", "left"]} style={styles.safeArea}>
+      <View collapsable={false} pointerEvents="none" ref={contentGuideRef} style={styles.guideTarget} />
       <View style={styles.header}>
-        <Pressable onPress={onBack} style={styles.backButton}>
+        <Pressable collapsable={false} onPress={onBack} ref={backGuideRef} style={styles.backButton}>
           <Ionicons name="chevron-back" color="#F5F5F1" size={24} />
         </Pressable>
         <View style={styles.titleBlock}>
@@ -235,12 +249,14 @@ export function PdfReaderScreen({
           <Text style={styles.loadingText}>没有可读取的 PDF 文件</Text>
         </View>
       )}
+      <SpotlightTour onComplete={pdfGuide.complete} steps={pdfGuideSteps} visible={pdfGuide.visible} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { backgroundColor: "#1D211F", flex: 1 },
+  guideTarget: { height: 170, left: "28%", position: "absolute", right: "28%", top: "38%" },
   header: {
     alignItems: "center",
     borderBottomColor: "#FFFFFF12",

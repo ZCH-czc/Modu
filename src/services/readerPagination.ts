@@ -27,7 +27,7 @@ export function createMeasuredReaderPaginationLayout(
     measurement.lineHeight,
     preferences.fontSize,
   );
-  const readingHeight = Math.max(160, measurement.viewportHeight - 116);
+  const readingHeight = Math.max(160, measurement.viewportHeight - 100);
 
   return {
     // Keep one glyph of reserve for punctuation and mixed-width Latin text.
@@ -52,7 +52,7 @@ export function createReaderPaginationLayout(
     preferences.fontSize * preferences.lineHeight,
     preferences.fontSize,
   );
-  const readingHeight = Math.max(260, height - 168);
+  const readingHeight = Math.max(260, height - 164);
 
   return {
     charactersPerLine: Math.max(10, Math.floor(textWidth / glyphWidth)),

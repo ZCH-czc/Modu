@@ -13,6 +13,7 @@ import {
   BackHandler,
   Easing,
   FlatList,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -36,6 +37,8 @@ import {
 } from "react-native-webview";
 
 import { useAppAlert } from "../components/AppDialog";
+import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
+import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import type { ReaderFont, WebChapterExtraction, WebChapterLink, WebPageExtraction, WebReaderFlow } from "../types";
 import { getReaderFontFamily, readerFontOptions } from "../utils/readerFonts";
 import { mergeWebChapterLinks } from "../services/webCapture";
@@ -76,6 +79,8 @@ type Props = {
   webReaderFlow: WebReaderFlow;
   volumeKeysEnabled: boolean;
   onWebReaderFlowChange: (flow: WebReaderFlow) => void;
+  guideEnabled?: boolean;
+  guideResetToken?: number;
 };
 
 type ReaderModeTheme = "paper" | "white" | "green" | "night";
@@ -136,7 +141,7 @@ const START_HTML = `<!doctype html><html><head><meta name="viewport" content="wi
 html,body{height:100%;margin:0;background:#f7f4ed;color:#24332b;font-family:system-ui,sans-serif}body{display:grid;place-items:center}.card{width:min(82vw,520px);text-align:center}.mark{width:76px;height:76px;border-radius:24px;margin:auto;display:grid;place-items:center;background:#e6eee8;color:#4f705e;font-size:34px}.title{font-size:28px;font-weight:700;margin:24px 0 10px}.text{font-size:15px;line-height:1.7;color:#7e837f}.hint{margin-top:28px;padding:14px 18px;border:1px solid #dedbd3;border-radius:18px;background:#fbfaf6;color:#56675e;font-size:14px}
 </style></head><body><div class="card"><div class="mark">◌</div><div class="title">去故事生长的地方</div><div class="text">输入网址、书名或作者。<br>打开正文，让墨读替你拂去喧闹。</div><div class="hint">只带回你能够正常抵达的文字</div></div></body></html>`;
 
-const EXTRACTION_SCRIPT = "\n(function () {\n  try {\n    if (!/^https?:$/.test(location.protocol)) throw new Error('请先打开具体网页');\n    var copy = document.cloneNode(true);\n    copy.querySelectorAll('script,style,noscript,svg,canvas,iframe,video,audio,nav,footer,form,input,textarea,select,button,[role=\"navigation\"],[aria-hidden=\"true\"],.ad,.ads,.advertisement,.recommend,.related,.comment,.comments').forEach(function (node) { node.remove(); });\n    var selectors = ['article','main','[role=\"main\"]','#chaptercontent','#content','#content1','.chapter-content','.read-content','.reading-content','.article-content','.entry-content','.post-content','.novel-content','.content'];\n    var candidates = [];\n    selectors.forEach(function (selector) { copy.querySelectorAll(selector).forEach(function (node) { if (candidates.indexOf(node) < 0) candidates.push(node); }); });\n    if (copy.body) candidates.push(copy.body);\n    var best = null, bestScore = -1;\n    candidates.forEach(function (node) {\n      var text = (node.innerText || node.textContent || '').trim();\n      if (text.length < 120) return;\n      var links = Array.prototype.slice.call(node.querySelectorAll('a')).reduce(function (sum, link) { return sum + (link.textContent || '').trim().length; }, 0);\n      var score = text.length + node.querySelectorAll('p,br').length * 80 + (/chapter|article|read|content|novel|text/.test(((node.id || '') + ' ' + (node.className || '')).toLowerCase()) ? 1200 : 0) - links * 1.6;\n      if (score > bestScore) { best = node; bestScore = score; }\n    });\n    if (!best) throw new Error('没有识别到足够长的正文');\n    best.querySelectorAll('br').forEach(function (br) { br.replaceWith('\\n'); });\n    var lines = (best.innerText || best.textContent || '').split(/\\n+/).map(function (line) { return line.replace(/[\\t\\u00a0 ]+/g, ' ').trim(); }).filter(function (line) { return line.length > 0; });\n    var content = lines.join('\\n\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n    if (content.length < 120) throw new Error('正文太短，请打开具体章节后重试');\n    if (content.length > 500000) content = content.slice(0, 500000);\n    var heading = document.querySelector('article h1, main h1, h1');\n    var title = ((heading && heading.textContent) || document.title || '网页摘录').replace(/[\\t\\n]+/g, ' ').replace(/\\s{2,}/g, ' ').trim();\n    var bookNode = document.querySelector('meta[property=\"og:novel:book_name\"],meta[property$=\"book_name\"],meta[name=\"book_name\"],meta[property=\"og:title\"]');\n    var bookTitle = bookNode ? (bookNode.getAttribute('content') || '') : '';\n    if (!bookTitle) bookTitle = title.replace(/(?:第.{1,16}[章节回卷集部篇]|chapter\\s*\\d+)[\\s\\S]*$/i, '').replace(/[-_|].*$/, '').trim();\n    var authorNode = document.querySelector('meta[name=\"author\"],meta[property$=\"author\"],[rel=\"author\"],.author,[class*=\"author\"],[id*=\"author\"]');\n    var author = authorNode ? (authorNode.getAttribute('content') || authorNode.textContent || '') : '';\n    if (!author) { var m = ((document.body && document.body.innerText) || '').slice(0,1200).match(/(?:作者|作\\s*者)\\s*[：:]\\s*([^\\n]{1,32})/); author = m ? m[1] : ''; }\n    author = author.replace(/^(?:作者|作\\s*者)\\s*[：:]?\\s*/, '').trim();\n    var chapterLinks = [], chapterSeen = {};\n    Array.prototype.forEach.call(document.querySelectorAll('a[href]'), function (link) {\n      var label = (link.textContent || '').replace(/[\\t\\n\\u00a0 ]+/g, ' ').trim();\n      var compact = label.replace(/\\s+/g, '');\n      var href = link.href || '';\n      if (!href || !/^https?:/i.test(href) || label.length < 2 || label.length > 100) return;\n      if (!/(?:第[零〇一二两三四五六七八九十百千万0-9]+[章节回卷集部篇]|chapter\\s*[0-9]+|序章|楔子|番外)/i.test(compact)) return;\n      if (chapterSeen[href]) return; chapterSeen[href] = true;\n      chapterLinks.push({ title: label.slice(0, 100), url: href });\n    });\n    if (chapterLinks.length < 3) chapterLinks = [];\n    if (chapterLinks.length > 2000) chapterLinks = chapterLinks.slice(0, 2000);\n    var tocUrl = '';\n    Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var tocLabel = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(目录|章节目录|全部章节|章节列表|返回目录|返回书页|书籍首页|更多章节|contents?|catalog)$/i.test(tocLabel) && link.href) { tocUrl = link.href; return true; }\n      return false;\n    });\n    var nextUrl = '', relNext = document.querySelector('link[rel=\"next\"],a[rel=\"next\"]');\n    if (relNext) nextUrl = relNext.href || relNext.getAttribute('href') || '';\n    if (!nextUrl) Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var label = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(下一章|下章|下一页|下一篇|继续阅读|nextchapter|next)$/i.test(label) && link.href) { nextUrl = link.href; return true; }\n      return false;\n    });\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction', payload:{ bookTitle:bookTitle.slice(0,120), title:title.slice(0,120), author:author.slice(0,80), content:content, url:location.href, nextUrl:nextUrl, tocUrl:tocUrl, chapterLinks:chapterLinks } }));\n  } catch (error) {\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction-error', message:error && error.message ? error.message : '正文提取失败' }));\n  }\n})();\ntrue;\n";
+const EXTRACTION_SCRIPT = "\n(function () {\n  try {\n    if (!/^https?:$/.test(location.protocol)) throw new Error('请先打开具体网页');\n    var copy = document.cloneNode(true);\n    copy.querySelectorAll('script,style,noscript,svg,canvas,iframe,video,audio,nav,footer,form,input,textarea,select,button,[role=\"navigation\"],[aria-hidden=\"true\"],.ad,.ads,.advertisement,.recommend,.related,.comment,.comments').forEach(function (node) { node.remove(); });\n    var selectors = ['article','main','[role=\"main\"]','#chaptercontent','#content','#content1','.chapter-content','.read-content','.reading-content','.article-content','.entry-content','.post-content','.novel-content','.content'];\n    var candidates = [];\n    selectors.forEach(function (selector) { copy.querySelectorAll(selector).forEach(function (node) { if (candidates.indexOf(node) < 0) candidates.push(node); }); });\n    if (copy.body) candidates.push(copy.body);\n    var best = null, bestScore = -1;\n    candidates.forEach(function (node) {\n      var text = (node.innerText || node.textContent || '').trim();\n      if (text.length < 120) return;\n      var links = Array.prototype.slice.call(node.querySelectorAll('a')).reduce(function (sum, link) { return sum + (link.textContent || '').trim().length; }, 0);\n      var score = text.length + node.querySelectorAll('p,br').length * 80 + (/chapter|article|read|content|novel|text/.test(((node.id || '') + ' ' + (node.className || '')).toLowerCase()) ? 1200 : 0) - links * 1.6;\n      if (score > bestScore) { best = node; bestScore = score; }\n    });\n    if (!best) throw new Error('没有识别到足够长的正文');\n    best.querySelectorAll('br').forEach(function (br) { br.replaceWith('\\n'); });\n    var lines = (best.innerText || best.textContent || '').split(/\\n+/).map(function (line) { return line.replace(/[\\t\\u00a0 ]+/g, ' ').trim(); }).filter(function (line) { return line.length > 0; });\n    var content = lines.join('\\n\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n    if (content.length < 120) throw new Error('正文太短，请打开具体章节后重试');\n    if (content.length > 500000) content = content.slice(0, 500000);\n    var heading = document.querySelector('.header .title, #chaptercontent h1, .chapter-title, .chaptername, .chapter-name, article h1, main h1, h1');\n    var title = ((heading && heading.textContent) || document.title || '网页摘录').replace(/[\\t\\n]+/g, ' ').replace(/\\s{2,}/g, ' ').trim();\n    var bookNode = document.querySelector('meta[property=\"og:novel:book_name\"],meta[property$=\"book_name\"],meta[name=\"book_name\"],meta[property=\"og:title\"]');\n    var bookTitle = bookNode ? (bookNode.getAttribute('content') || '') : '';\n    var cachedBook = null;\n    try { var runtimeId = typeof id !== 'undefined' ? id : null; if (runtimeId !== null && window.lastread && typeof window.lastread.get === 'function') cachedBook = window.lastread.get(runtimeId); } catch (ignore) {}\n    if (!bookTitle && cachedBook && cachedBook.length > 2) bookTitle = cachedBook[1] || '';\n    if (!bookTitle) bookTitle = title.replace(/(?:第.{1,16}[章节回卷集部篇]|chapter\\s*\\d+)[\\s\\S]*$/i, '').replace(/[-_|].*$/, '').trim();\n    var authorNode = document.querySelector('meta[name=\"author\"],meta[property$=\"author\"],[rel=\"author\"],.author,[class*=\"author\"],[id*=\"author\"]');\n    var author = authorNode ? (authorNode.getAttribute('content') || authorNode.textContent || '') : '';\n    if (!author && cachedBook && cachedBook.length > 2) author = cachedBook[2] || '';\n    if (!author) { var m = ((document.body && document.body.innerText) || '').slice(0,1200).match(/(?:作者|作\\s*者)\\s*[：:]\\s*([^\\n]{1,32})/); author = m ? m[1] : ''; }\n    author = author.replace(/^(?:作者|作\\s*者)\\s*[：:]?\\s*/, '').trim();\n    var chapterLinks = [], chapterSeen = {};\n    Array.prototype.forEach.call(document.querySelectorAll('a[href]'), function (link) {\n      var label = (link.textContent || '').replace(/[\\t\\n\\u00a0 ]+/g, ' ').trim();\n      var compact = label.replace(/\\s+/g, '');\n      var href = link.href || '';\n      if (!href || !/^https?:/i.test(href) || label.length < 2 || label.length > 100) return;\n      if (!/(?:第[零〇一二两三四五六七八九十百千万0-9]+[章节回卷集部篇]|chapter\\s*[0-9]+|序章|楔子|番外)/i.test(compact)) return;\n      if (chapterSeen[href]) return; chapterSeen[href] = true;\n      chapterLinks.push({ title: label.slice(0, 100), url: href });\n    });\n    if (chapterLinks.length < 3) chapterLinks = [];\n    if (chapterLinks.length > 2000) chapterLinks = chapterLinks.slice(0, 2000);\n    var tocUrl = '';\n    Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var tocLabel = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(目录|章节目录|全部章节|章节列表|返回目录|返回书页|书籍首页|更多章节|contents?|catalog)$/i.test(tocLabel) && link.href) { tocUrl = link.href; return true; }\n      return false;\n    });\n    var nextUrl = '', relNext = document.querySelector('link[rel=\"next\"],a[rel=\"next\"]');\n    if (relNext) nextUrl = relNext.href || relNext.getAttribute('href') || '';\n    if (!nextUrl) Array.prototype.some.call(document.querySelectorAll('a'), function (link) {\n      var label = (link.textContent || '').replace(/\\s+/g, '');\n      if (/^(下一章|下章|下一页|下一篇|继续阅读|nextchapter|next)$/i.test(label) && link.href) { nextUrl = link.href; return true; }\n      return false;\n    });\n    var routeMatch = location.href.match(/\\/#\\/book\\/(\\d+)\\/(\\d+)(?:_\\d+)?\\.html/i);\n    if (routeMatch) {\n      if (!tocUrl) tocUrl = location.origin + '/#/book/' + routeMatch[1] + '/';\n      if (!nextUrl) nextUrl = location.origin + '/#/book/' + routeMatch[1] + '/' + (Number(routeMatch[2]) + 1) + '.html';\n    }\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction', payload:{ bookTitle:bookTitle.slice(0,120), title:title.slice(0,120), author:author.slice(0,80), content:content, url:location.href, nextUrl:nextUrl, tocUrl:tocUrl, chapterLinks:chapterLinks } }));\n  } catch (error) {\n    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-extraction-error', message:error && error.message ? error.message : '正文提取失败' }));\n  }\n})();\ntrue;\n";
 
 const CATALOG_EXTRACTION_SCRIPT = String.raw`
 (function () {
@@ -167,18 +172,35 @@ const CATALOG_EXTRACTION_SCRIPT = String.raw`
         Array.prototype.forEach.call(best.querySelectorAll('a[href]'), function (link) { add(link, true); });
       }
     }
-    if (links.length < 2) throw new Error('这一页没有识别到章节目录');
-    if (links.length > 2000) links = links.slice(0, 2000);
     var bookNode = document.querySelector('meta[property="og:novel:book_name"],meta[property$="book_name"],meta[name="book_name"],meta[property="og:title"]');
-    var bookTitle = ((bookNode && bookNode.getAttribute('content')) || document.title || '').replace(/[\t\n]+/g, ' ').trim();
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-catalog', payload:{ bookTitle:bookTitle.slice(0,120), tocUrl:location.href, chapterLinks:links } }));
+    var bookLabel = document.querySelector('.bookname,.book-name,[class*="book-title"],article h1,main h1,h1');
+    var bookTitle = ((bookNode && bookNode.getAttribute('content')) || (bookLabel && bookLabel.textContent) || document.title || '').replace(/[\t\n]+/g, ' ').trim();
+    var publish = function (resolvedLinks) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-catalog', payload:{ bookTitle:bookTitle.slice(0,120), tocUrl:location.href, chapterLinks:resolvedLinks.slice(0,2000) } }));
+    };
+    var bqgRoute = location.href.match(/\/#\/book\/(\d+)\/?/i);
+    if (bqgRoute && /(^|\.)bqg107\.xyz$/i.test(location.hostname) && links.length < 100 && typeof fetch === 'function') {
+      fetch('/api/booklist?id=' + encodeURIComponent(bqgRoute[1]), { credentials:'include' })
+        .then(function (response) { if (!response.ok) throw new Error('目录请求失败'); return response.json(); })
+        .then(function (data) {
+          if (!data || !Array.isArray(data.list) || data.list.length < 2) throw new Error('目录数据为空');
+          publish(data.list.map(function (label, index) { return { title:String(label).slice(0,100), url:location.origin + '/book/' + bqgRoute[1] + '/' + (index + 1) + '.html' }; }));
+        })
+        .catch(function (error) {
+          if (links.length >= 2) publish(links);
+          else window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-catalog-error', message:error && error.message ? error.message : '章节目录提取失败' }));
+        });
+      return;
+    }
+    if (links.length < 2) throw new Error('这一页没有识别到章节目录');
+    publish(links);
   } catch (error) {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type:'modu-catalog-error', message:error && error.message ? error.message : '章节目录提取失败' }));
   }
 })();
 true;
 `;
-export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSource, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange, volumeKeysEnabled }: Props) {
+export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSource, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange, volumeKeysEnabled, guideEnabled = false, guideResetToken = 0 }: Props) {
   const Alert = useAppAlert();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
@@ -210,10 +232,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const [readerFontSize,setReaderFontSize]=useState(19);
   const [readerPageIndex,setReaderPageIndex]=useState(0);
   const [readerPageGestureLocked,setReaderPageGestureLocked]=useState(false);
+  const [readerControlsVisible,setReaderControlsVisible]=useState(false);
   const [readerPanel,setReaderPanel]=useState<ReaderPanel>();
   const [readerLoading,setReaderLoading]=useState(false);
   const savedBookRef=useRef(false);
   const readerPageDrag=useRef(new RNAnimated.Value(0)).current;
+  const readerControlsProgress=useRef(new RNAnimated.Value(0)).current;
+  const readerScrollTouchRef=useRef({x:0,y:0});
   const readerPageAnimatingRef=useRef(false);
   const readerPageTargetRef=useRef<"start"|"end">("start");
   const readerRequestRef=useRef(false);
@@ -223,28 +248,55 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const catalogRequestKindRef=useRef<"marked"|"reader"|undefined>(undefined);
   const catalogRequestSeedRef=useRef<WebChapterLink[]>([]);
   const readerScrollRef=useRef<ScrollView>(null);
+  const addressGuideRef=useRef<View>(null);
+  const browserNavGuideRef=useRef<View>(null);
+  const browserActionsGuideRef=useRef<View>(null);
+  const readerGestureGuideRef=useRef<View>(null);
+  const readerExitGuideRef=useRef<View>(null);
+  const readerChapterGuideRef=useRef<View>(null);
+  const readerAppearanceGuideRef=useRef<View>(null);
+  const readerSaveGuideRef=useRef<View>(null);
+  const browserGuide=useSpotlightGuide("web-browser-v1",guideEnabled&&visible&&!readerMode,guideResetToken);
+  const webModeGuide=useSpotlightGuide("web-reading-mode-v1",guideEnabled&&visible&&readerMode&&Boolean(preview),guideResetToken);
+  const browserGuideSteps=useMemo<SpotlightStep[]>(()=>[
+    {key:"address",target:addressGuideRef,icon:"search-outline",title:"从这里寻找故事",description:"输入网址、书名或作者。访问过的网址会出现在历史联想中，常用网站也可以收藏。",placement:"below"},
+    {key:"navigation",target:browserNavGuideRef,icon:"navigate-outline",title:"像浏览器一样使用",description:"这里依次提供首页、前进后退、历史、网页收藏和目录标记。目录标记能帮助墨读识别完整章节。",placement:"above"},
+    {key:"actions",target:browserActionsGuideRef,icon:"book-outline",title:"收藏与阅读分开",description:"书签图标会把当前网页内容加入书架；书本图标只进入沉浸式阅读，不会自动收藏。",placement:"above"},
+  ],[]);
+  const webModeGuideSteps=useMemo<SpotlightStep[]>(()=>[
+    {key:"gestures",target:readerGestureGuideRef,icon:"hand-left-outline",title:"网页也能左右翻页",description:"左右滑动或点击两侧翻页，轻点中央显示菜单。也可以在阅读外观中切换为上下滚动。"},
+    {key:"chapters",target:readerChapterGuideRef,icon:"list-outline",title:"网页章节目录",description:"打开已识别的目录并直接跳转。未缓存的章节会在选择后按需整理。",placement:"above"},
+    {key:"appearance",target:readerAppearanceGuideRef,icon:"text-outline",title:"调整网页阅读外观",description:"切换主题、字体、字号和阅读方向，让网页正文与本地阅读体验保持一致。",placement:"above"},
+    {key:"save",target:readerSaveGuideRef,icon:"bookmark-outline",title:"需要时再加入书架",description:"阅读模式不会自动收藏。点这里保存后，书架会记住原网页、章节和阅读位置。",placement:"above"},
+    {key:"exit",target:readerExitGuideRef,icon:"chevron-down",title:"退出阅读模式",description:"点这里回到原网页；关闭网页寻书则会沿进入方向返回书架。",placement:"below"},
+  ],[]);
+
+  useEffect(()=>{if(browserGuide.visible)setBrowserPanel(undefined);},[browserGuide.visible]);
+  useEffect(()=>{if(!webModeGuide.visible)return;setReaderPanel(undefined);setReaderControlsVisible(true);},[webModeGuide.visible]);
   const {width:screenWidth,height:screenHeight}=useWindowDimensions();
+  const isTabletToolbar=screenWidth>=600;
   const readerPalette=READER_MODE_THEMES[readerTheme];
   const readerFontFamily=getReaderFontFamily(readerFont);
-  const readerColumnWidth=Math.min(screenWidth-38,720);
-  const readerPageLimit=Math.max(150,Math.floor((readerColumnWidth/readerFontSize)*(Math.max(screenHeight-insets.top-insets.bottom-250,260)/(readerFontSize*1.82))*.76));
-  const readerPages=useMemo(()=>paginateReaderContent(preview?.content??"",readerPageLimit),[preview?.content,readerPageLimit]);
+  const readerColumnWidth=Math.min(screenWidth-38,screenWidth>=600?560:720);
+  const readerFirstPageFactor=screenWidth>=600?.62:.72;
+  const readerPageLimit=Math.max(150,Math.floor((readerColumnWidth/readerFontSize)*(Math.max(screenHeight-insets.top-insets.bottom-(screenWidth>=600?170:150),260)/(readerFontSize*1.82))*.8));
+  const readerPages=useMemo(()=>paginateReaderContent(preview?.content??"",readerPageLimit,readerFirstPageFactor),[preview?.content,readerFirstPageFactor,readerPageLimit]);
   const previousReaderPage=useMemo(()=>{
     if(!preview)return undefined;
     if(readerPageIndex>0)return {chapter:preview,pages:readerPages,pageIndex:readerPageIndex-1};
     const chapter=readerHistory[readerIndex-1];
     if(!chapter)return undefined;
-    const pages=paginateReaderContent(chapter.content,readerPageLimit);
+    const pages=paginateReaderContent(chapter.content,readerPageLimit,readerFirstPageFactor);
     return {chapter,pages,pageIndex:Math.max(pages.length-1,0)};
-  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerPageLimit]);
+  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerFirstPageFactor,readerPageLimit]);
   const nextReaderPage=useMemo(()=>{
     if(!preview)return undefined;
     if(readerPageIndex<readerPages.length-1)return {chapter:preview,pages:readerPages,pageIndex:readerPageIndex+1};
     const chapter=readerHistory[readerIndex+1];
     if(!chapter)return undefined;
-    const pages=paginateReaderContent(chapter.content,readerPageLimit);
+    const pages=paginateReaderContent(chapter.content,readerPageLimit,readerFirstPageFactor);
     return {chapter,pages,pageIndex:0};
-  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerPageLimit]);
+  },[preview,readerPageIndex,readerPages,readerHistory,readerIndex,readerFirstPageFactor,readerPageLimit]);
 
   const previousReaderPageTranslate=useMemo(()=>readerPageDrag.interpolate({
     inputRange:[-screenWidth,0,screenWidth],outputRange:[-screenWidth,-screenWidth,0],extrapolate:"clamp",
@@ -260,6 +312,15 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
     readerPageAnimatingRef.current=false;
     setReaderPageGestureLocked(false);
   },[readerMode,readerPageDrag,visible,webReaderFlow]);
+
+  useEffect(()=>{
+    RNAnimated.timing(readerControlsProgress,{
+      toValue:readerControlsVisible?1:0,
+      duration:readerControlsVisible?190:145,
+      easing:readerControlsVisible?Easing.out(Easing.cubic):Easing.in(Easing.quad),
+      useNativeDriver:true,
+    }).start();
+  },[readerControlsProgress,readerControlsVisible]);
 
   const source = useMemo(() => (url ? { uri: url } : { html: START_HTML }), [url]);
   const suggestions = useMemo(() => {
@@ -294,7 +355,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
 
   useEffect(() => {
     if (!currentCatalogHint?.chapterLinks?.length) return;
-    setChapterCatalog(mergeWebChapterLinks(currentCatalogHint.chapterLinks));
+    setChapterCatalog(orderWebCatalogLinks(mergeWebChapterLinks(currentCatalogHint.chapterLinks)));
   }, [currentCatalogHint]);
 
   const rememberCatalogHint = useCallback((hint: WebCatalogHint) => {
@@ -326,6 +387,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   }, []);
 
   const openAddress = useCallback((target: string) => {
+    Keyboard.dismiss();
     setAddressFocused(false);
     setBrowserPanel(undefined);
     setAddress(target);
@@ -358,6 +420,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
 
   useEffect(() => {
     if (!visible) return;
+    setReaderControlsVisible(false);
     if (!initialExtraction) {
       savedBookRef.current = false;
       setReaderMode(false);
@@ -414,23 +477,27 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const navigate = () => {
     captureRef.current = undefined;
     setCapturing(false);
-    const target = normalizeAddress(address);
+    const target = normalizeAddress(address, currentUrl);
     if (!target) return;
     openAddress(target);
   };
 
+  const exitReaderMode=()=>{
+    readerRequestRef.current=false;
+    readerNavigationRef.current=false;
+    catalogRequestRef.current=false;
+    setReaderLoading(false);
+    setReaderPanel(undefined);
+    setReaderControlsVisible(false);
+    setReaderMode(false);
+    setPreview(undefined);
+  };
+
   const closeOrGoBack = () => {
+    if(addressFocused){Keyboard.dismiss();setAddressFocused(false);return;}
     if(browserPanel){setBrowserPanel(undefined);return;}
     if(readerPanel){setReaderPanel(undefined);return;}
-    if(readerMode){
-      readerRequestRef.current=false;
-      readerNavigationRef.current=false;
-      setReaderLoading(false);
-      catalogRequestRef.current=false;
-      setReaderMode(false);
-      setPreview(undefined);
-      return;
-    }
+    if(readerMode){exitReaderMode();return;}
     if(preview){setPreview(undefined);return;}
     if(canGoBack) webRef.current?.goBack(); else onClose();
   };
@@ -442,7 +509,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
       return true;
     });
     return () => subscription.remove();
-  }, [browserPanel, canGoBack, onClose, preview, readerMode, readerPanel, visible]);
+  }, [addressFocused, browserPanel, canGoBack, onClose, preview, readerControlsVisible, readerMode, readerPanel, visible]);
 
   const handleNavigation = (state: WebViewNavigation) => {
     setCanGoBack(state.canGoBack);
@@ -498,11 +565,11 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
         catalogRequestRef.current = false;
         catalogRequestKindRef.current = undefined;
         setReaderLoading(false);
-        const merged = mergeWebChapterLinks(
-          catalogRequestSeedRef.current,
+        const merged = orderWebCatalogLinks(mergeWebChapterLinks(
           message.payload.chapterLinks,
+          catalogRequestSeedRef.current,
           readerHistory.map(({ title, url }) => ({ title, url })),
-        );
+        ));
         setChapterCatalog(merged);
         const tocUrl = message.payload.tocUrl || currentUrl;
         if (tocUrl) {
@@ -661,6 +728,20 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
 
   const extract = (action: "read" | "save") => {
     if (!currentUrl || loading || extracting || saving) return;
+    const landingChapter = getBookLandingChapterUrl(currentUrl, chapterCatalog);
+    if (landingChapter) {
+      extractionActionRef.current=action;
+      readerRequestRef.current=true;
+      if(action==="read"){
+        setReaderHistory([]);
+        setReaderIndex(0);
+      }else{
+        setSaving(true);
+      }
+      setExtracting(true);
+      openAddress(landingChapter);
+      return;
+    }
     extractionActionRef.current=action;
     readerRequestRef.current=action==="read";
     if(action==="save") setSaving(true);
@@ -712,9 +793,9 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
       },180);
       return;
     }
-    if(readerNavigationRef.current){
+    if(readerNavigationRef.current||readerRequestRef.current){
       setTimeout(()=>{
-        if(!readerNavigationRef.current)return;
+        if(!readerNavigationRef.current&&!readerRequestRef.current)return;
         setExtracting(true);
         webRef.current?.injectJavaScript(EXTRACTION_SCRIPT);
       },180);
@@ -747,7 +828,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
     const catalog=mergeWebChapterLinks(chapterCatalog,extraction.chapterLinks,history);
     setChapterCatalog(catalog);
     setReaderHistory(orderReaderHistory(history,catalog)); setPreview({...history[0],chapterLinks:catalog});
-    setReaderIndex(0); setReaderPanel(undefined); setReaderMode(true);
+    setReaderIndex(0); setReaderPanel(undefined); setReaderControlsVisible(false); setReaderMode(true);
     requestAnimationFrame(()=>readerScrollRef.current?.scrollTo({animated:false,y:0}));
   };
   const openWebCatalog=()=>{
@@ -762,6 +843,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
     if(target===url)webRef.current?.reload();else setUrl(target);
   };
   const openCatalogChapter=(link:WebChapterLink)=>{
+    setReaderControlsVisible(false);
     const loadedIndex=readerHistory.findIndex((chapter)=>chapter.url===link.url);
     if(loadedIndex>=0){openReaderChapter(loadedIndex);return;}
     if(readerLoading)return;
@@ -774,7 +856,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   function openReaderChapter(index:number,target:"start"|"end"="start"){
     const chapter=readerHistory[index]; if(!chapter)return;
     readerPageTargetRef.current=target;
-    setReaderIndex(index); setPreview(chapter); setReaderPanel(undefined);
+    setReaderIndex(index); setPreview(chapter); setReaderPanel(undefined); setReaderControlsVisible(false);
     if(savedBookRef.current){
       void onAdd({
         ...chapter,
@@ -907,7 +989,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
           </Pressable>
         </View>
 
-        <View style={styles.addressRow}>
+        <View collapsable={false} ref={addressGuideRef} style={styles.addressRow}>
           <View style={styles.addressBox}>
             <Ionicons color="#829087" name="search-outline" size={17} />
             <TextInput
@@ -947,13 +1029,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
         <View style={styles.browser}>
           {url ? (
           <WebView
-            accessibilityElementsHidden={!url}
+            accessibilityElementsHidden={!url || readerMode}
             allowFileAccess={false}
             allowUniversalAccessFromFileURLs={false}
             androidLayerType="hardware"
             cacheEnabled
             domStorageEnabled
-            importantForAccessibility={!url ? "no-hide-descendants" : "auto"}
+            importantForAccessibility={!url || readerMode ? "no-hide-descendants" : "auto"}
             javaScriptCanOpenWindowsAutomatically={false}
             javaScriptEnabled
             key={webViewKey}
@@ -968,7 +1050,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             onNavigationStateChange={handleNavigation}
             onRenderProcessGone={recoverWebView}
             onShouldStartLoadWithRequest={(request) =>
-              /^(https?:|about:blank)/i.test(request.url)
+              /^(https?:|about:blank|javascript:)/i.test(request.url)
             }
             originWhitelist={["http://*", "https://*", "about:blank"]}
             overScrollMode="never"
@@ -994,7 +1076,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
           />
           ) : null}
           {!url ? (
-            <ScrollView contentContainerStyle={styles.browserHome} showsVerticalScrollIndicator={false} style={styles.browserHomeLayer}>
+            <ScrollView contentContainerStyle={styles.browserHome} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={styles.browserHomeLayer}>
               <View style={styles.homeHero}>
                 <View style={styles.homeMark}><Ionicons color="#4F705E" name="compass-outline" size={27} /></View>
                 <Text style={styles.homeTitle}>循着文字，去找下一本书</Text>
@@ -1026,7 +1108,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
                     <Text style={styles.homeSectionTitle}>最近访问</Text>
                     <Pressable onPress={() => setBrowserPanel("history")}><Text style={styles.homeHistoryLink}>查看全部</Text></Pressable>
                   </View>
-                  {webHistory.slice(0, 4).map((item) => (
+                  {dedupeHistoryByOrigin(webHistory).slice(0, 4).map((item) => (
                     <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.homeRecentItem}>
                       <Ionicons color="#78877E" name="time-outline" size={16} />
                       <Text numberOfLines={1} style={styles.homeRecentTitle}>{item.title}</Text>
@@ -1046,7 +1128,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
                 </View>
                 <Pressable onPress={() => setBrowserPanel(undefined)} style={styles.historyClose}><Ionicons color="#52655A" name="close" size={19} /></Pressable>
               </View>
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {webHistory.length ? webHistory.map((item) => (
                   <Pressable key={item.url} onPress={() => openAddress(item.url)} style={styles.historyItem}>
                     <View style={styles.historyIcon}><Ionicons color="#6A7F73" name="globe-outline" size={16} /></View>
@@ -1109,7 +1191,8 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
         </View>
 
         <View style={styles.toolbar}>
-          <View style={styles.navButtons}>
+          <View style={[styles.toolbarContent,isTabletToolbar&&styles.toolbarContentTablet]}>
+            <View collapsable={false} ref={browserNavGuideRef} style={[styles.navButtons,isTabletToolbar&&styles.navButtonsTablet]}>
             <ToolButton accessibilityLabel={t("网页寻书首页")} icon="home-outline" onPress={openHome} />
             <ToolButton accessibilityLabel={t("后退")} disabled={!canGoBack} icon="arrow-back" onPress={() => webRef.current?.goBack()} />
             <ToolButton accessibilityLabel={t("前进")} disabled={!canGoForward} icon="arrow-forward" onPress={() => webRef.current?.goForward()} />
@@ -1123,7 +1206,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
               onPress={isCatalogMarked && currentCatalogHint?.chapterLinks?.length ? () => setBrowserPanel("catalog") : markCurrentAsCatalog}
             />
           </View>
-          <View style={styles.browserActions}>
+          <View collapsable={false} ref={browserActionsGuideRef} style={styles.browserActions}>
             <Pressable
               accessibilityLabel={t("收藏到书架")}
               accessibilityRole="button"
@@ -1154,6 +1237,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             >
               {extracting && !capturing && !saving ? <ActivityIndicator color="#F8F4EA" size="small" /> : <Ionicons color="#F8F4EA" name={capturing ? "stop-circle-outline" : "book-outline"} size={22} />}
             </Pressable>
+          </View>
           </View>
         </View>
 
@@ -1195,9 +1279,22 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
         ) : null}
 
         {readerMode && preview ? (
-          <Animated.View entering={SlideInDown.duration(220)} style={[styles.readerMode,{backgroundColor:readerPalette.background,paddingTop:insets.top}]}>
-            <View style={[styles.readerHeader,{backgroundColor:`${readerPalette.background}F2`,borderColor:`${readerPalette.muted}28`}]}>
-              <Pressable accessibilityLabel="退出网页阅读模式" onPress={closeOrGoBack} style={styles.readerIcon}>
+          <Animated.View entering={SlideInDown.duration(220)} style={[styles.readerMode,{backgroundColor:readerPalette.background}]}>
+            <View collapsable={false} pointerEvents="none" ref={readerGestureGuideRef} style={styles.readerGuideTarget}/>
+            <RNAnimated.View
+              pointerEvents={readerControlsVisible?"auto":"none"}
+              style={[
+                styles.readerHeader,
+                {
+                  backgroundColor:`${readerPalette.background}F2`,
+                  borderColor:`${readerPalette.muted}28`,
+                  top:Math.max(8,insets.top),
+                  opacity:readerControlsProgress,
+                  transform:[{translateY:readerControlsProgress.interpolate({inputRange:[0,1],outputRange:[-18,0]})}],
+                },
+              ]}
+            >
+              <Pressable accessibilityLabel="退出网页阅读模式" collapsable={false} onPress={exitReaderMode} ref={readerExitGuideRef} style={styles.readerIcon}>
                 <Ionicons color={readerPalette.text} name="chevron-down" size={23}/>
               </Pressable>
               <View style={styles.readerHeaderText}>
@@ -1207,10 +1304,22 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
               <Pressable accessibilityLabel="转为分页阅读" onPress={openPagedReader} style={styles.readerIcon}>
                 <Ionicons color={readerPalette.text} name="reader-outline" size={21}/>
               </Pressable>
-            </View>
+            </RNAnimated.View>
 
             {webReaderFlow==="scroll" ? (
-              <ScrollView contentContainerStyle={[styles.readerContent,{paddingBottom:118+insets.bottom}]} ref={readerScrollRef} showsVerticalScrollIndicator={false}>
+              <ScrollView
+                contentContainerStyle={styles.readerContent}
+                onTouchStart={(event)=>{readerScrollTouchRef.current={x:event.nativeEvent.pageX,y:event.nativeEvent.pageY};}}
+                onTouchEnd={(event)=>{
+                  const dx=Math.abs(event.nativeEvent.pageX-readerScrollTouchRef.current.x);
+                  const dy=Math.abs(event.nativeEvent.pageY-readerScrollTouchRef.current.y);
+                  if(dx<9&&dy<9&&event.nativeEvent.pageX>screenWidth*.27&&event.nativeEvent.pageX<screenWidth*.73){
+                    if(readerPanel)setReaderPanel(undefined);else setReaderControlsVisible((value)=>!value);
+                  }
+                }}
+                ref={readerScrollRef}
+                showsVerticalScrollIndicator={false}
+              >
                 <View style={{alignSelf:"center",width:readerColumnWidth}}>
                   <Text style={[styles.readerEyebrow,{color:readerPalette.accent}]}>WEB READER</Text>
                   <Text style={[styles.readerTitle,{color:readerPalette.text,fontFamily:readerFontFamily}]}>{preview.title}</Text>
@@ -1239,7 +1348,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
                 onGestureEvent={onReaderPageGesture}
                 onHandlerStateChange={onReaderPageGestureStateChange}
               >
-                <RNAnimated.View style={[styles.readerPaged,{paddingBottom:88+insets.bottom}]}>
+                <RNAnimated.View style={styles.readerPaged}>
                   {[
                     {key:"previous",snapshot:previousReaderPage,translateX:previousReaderPageTranslate},
                     {key:"next",snapshot:nextReaderPage,translateX:nextReaderPageTranslate},
@@ -1291,6 +1400,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
                   </RNAnimated.View>
                   <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
                     <Pressable accessibilityLabel="网页阅读上一页" disabled={!canTurnReaderPrevious} onPress={()=>turnReaderPage(-1)} style={styles.readerLeftTap}/>
+                    <Pressable accessibilityLabel="显示或隐藏网页阅读工具栏" onPress={()=>{if(readerPanel)setReaderPanel(undefined);else setReaderControlsVisible((value)=>!value);}} style={styles.readerCenterTap}/>
                     <Pressable accessibilityLabel="网页阅读下一页" disabled={!canTurnReaderNext} onPress={()=>turnReaderPage(1)} style={styles.readerRightTap}/>
                   </View>
                 </RNAnimated.View>
@@ -1395,14 +1505,25 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
               </View>
             ) : null}
 
-            <View style={[styles.readerToolbar,{backgroundColor:`${readerPalette.background}F4`,borderColor:`${readerPalette.muted}30`,bottom:Math.max(10,insets.bottom+6)}]}>
+            <RNAnimated.View
+              pointerEvents={readerControlsVisible?"auto":"none"}
+              style={[
+                styles.readerToolbar,
+                {
+                  backgroundColor:`${readerPalette.background}F4`,
+                  borderColor:`${readerPalette.muted}30`,
+                  opacity:readerControlsProgress,
+                  transform:[{translateY:readerControlsProgress.interpolate({inputRange:[0,1],outputRange:[18,0]})}],
+                },
+              ]}
+            >
               <Pressable accessibilityLabel={webReaderFlow==="paged"?"上一页":"上一章"}
                 disabled={webReaderFlow==="paged"?!canTurnReaderPrevious:readerIndex===0}
                 onPress={()=>webReaderFlow==="paged"?turnReaderPage(-1):openReaderChapter(readerIndex-1)}
                 style={[styles.readerTool,(webReaderFlow==="paged"?!canTurnReaderPrevious:readerIndex===0)&&styles.readerDisabled]}>
                 <Ionicons color={readerPalette.text} name="chevron-back" size={20}/>
               </Pressable>
-              <Pressable accessibilityLabel="网页阅读章节" onPress={()=>setReaderPanel(readerPanel==="chapters"?undefined:"chapters")} style={styles.readerCenterTool}>
+              <Pressable accessibilityLabel="网页阅读章节" collapsable={false} onPress={()=>setReaderPanel(readerPanel==="chapters"?undefined:"chapters")} ref={readerChapterGuideRef} style={styles.readerCenterTool}>
                 <Ionicons color={readerPalette.accent} name="list-outline" size={19}/>
                 <Text style={[styles.readerCenterText,{color:readerPalette.text}]}>
                   {webReaderFlow==="paged"?`章节 ${readerIndex+1}/${readerHistory.length} · ${readerPageIndex+1}/${readerPages.length}`:`章节 ${readerIndex+1}/${readerHistory.length}`}
@@ -1414,13 +1535,13 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
                 style={[styles.readerTool,(webReaderFlow==="paged"?!canTurnReaderNext:readerIndex>=readerHistory.length-1&&!preview.nextUrl)&&styles.readerDisabled]}>
                 <Ionicons color={readerPalette.text} name="chevron-forward" size={20}/>
               </Pressable>
-              <Pressable accessibilityLabel="阅读外观" onPress={()=>setReaderPanel(readerPanel==="appearance"?undefined:"appearance")} style={styles.readerTool}>
+              <Pressable accessibilityLabel="阅读外观" collapsable={false} onPress={()=>setReaderPanel(readerPanel==="appearance"?undefined:"appearance")} ref={readerAppearanceGuideRef} style={styles.readerTool}>
                 <Text style={[styles.readerAa,{color:readerPalette.text}]}>Aa</Text>
               </Pressable>
-              <Pressable accessibilityLabel="加入书架" disabled={saving} onPress={()=>void saveReaderBook()} style={styles.readerTool}>
+              <Pressable accessibilityLabel="加入书架" collapsable={false} disabled={saving} onPress={()=>void saveReaderBook()} ref={readerSaveGuideRef} style={styles.readerTool}>
                 {saving?<ActivityIndicator color={readerPalette.accent} size="small"/>:<Ionicons color={readerPalette.text} name="bookmark-outline" size={20}/>}
               </Pressable>
-            </View>
+            </RNAnimated.View>
 
             {readerLoading ? (
               <View style={[styles.readerLoading,{backgroundColor:`${readerPalette.background}E8`}]}>
@@ -1437,6 +1558,8 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             ) : null}
           </Animated.View>
         ) : null}
+        <SpotlightTour onComplete={browserGuide.complete} steps={browserGuideSteps} visible={browserGuide.visible}/>
+        <SpotlightTour onComplete={webModeGuide.complete} steps={webModeGuideSteps} visible={webModeGuide.visible}/>
       </SafeAreaView>
     </Animated.View>
   );
@@ -1458,6 +1581,23 @@ function ToolButton({ accessibilityLabel, active, disabled, icon, onPress }: { a
   );
 }
 
+function orderWebCatalogLinks(links: WebChapterLink[]) {
+  const parsed = links.map((item, index) => {
+    const match = item.url.match(/\/book\/(\d+)\/(\d+)(?:_(\d+))?\.html(?:[?#]|$)/i);
+    return { item, index, bookId: match?.[1], chapter: Number(match?.[2]), page: Number(match?.[3] ?? 1) };
+  });
+  const numbered = parsed.filter((entry) => entry.bookId && Number.isFinite(entry.chapter));
+  if (numbered.length < Math.max(3, Math.floor(links.length * 0.8))) return links;
+  if (new Set(numbered.map((entry) => entry.bookId)).size !== 1) return links;
+  return [...parsed].sort((left, right) => {
+    const leftValid = left.bookId && Number.isFinite(left.chapter);
+    const rightValid = right.bookId && Number.isFinite(right.chapter);
+    if (leftValid && rightValid) return left.chapter - right.chapter || left.page - right.page || left.index - right.index;
+    if (leftValid) return -1;
+    if (rightValid) return 1;
+    return left.index - right.index;
+  }).map((entry) => entry.item);
+}
 function orderReaderHistory(
   history: WebPageExtraction[],
   catalog: WebChapterLink[],
@@ -1478,7 +1618,7 @@ function toReaderHistory(extraction:WebPageExtraction){
   }));
 }
 
-function paginateReaderContent(content:string,limit:number){
+function paginateReaderContent(content:string,limit:number,firstPageFactor=.68){
   const paragraphs=content.split(/\n{2,}/).map((item)=>item.trim()).filter(Boolean);
   if(!paragraphs.length)return [""];
   const pages:string[]=[];
@@ -1487,7 +1627,7 @@ function paginateReaderContent(content:string,limit:number){
   paragraphs.forEach((paragraph)=>{
     let rest=paragraph;
     while(rest.length){
-      const activeLimit=pages.length===0?Math.max(90,Math.floor(limit*.52)):limit;
+      const activeLimit=pages.length===0?Math.max(90,Math.floor(limit*firstPageFactor)):limit;
       const space=Math.max(activeLimit-page.length-(page?2:0),0);
       if(space===0){push();continue;}
       const chunk=rest.slice(0,space);
@@ -1504,6 +1644,23 @@ function safeHost(value: string) {
   try { return new URL(value).hostname.replace(/^www\./, ""); } catch { return value; }
 }
 
+function dedupeHistoryByOrigin(history: WebVisit[]) {
+  const seen = new Set<string>();
+  return history.filter((item) => {
+    let key = item.url;
+    try { key = new URL(item.url).origin; } catch {}
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getBookLandingChapterUrl(currentUrl: string, chapterCatalog: WebChapterLink[]) {
+  const firstKnownChapter = orderWebCatalogLinks(chapterCatalog)[0]?.url;
+  const route = currentUrl.match(/^(https?:\/\/[^/]+)\/#\/book\/(\d+)\/?(?:[?#].*)?$/i);
+  if (!route || !/(^|\.)bqg107\.xyz$/i.test(safeHost(route[1]))) return undefined;
+  return firstKnownChapter || `${route[1]}/book/${route[2]}/1.html`;
+}
 function normalizeCatalogUrl(value: string) {
   if (!value.toLowerCase().startsWith("http://") && !value.toLowerCase().startsWith("https://")) return "";
   try {
@@ -1515,12 +1672,27 @@ function normalizeCatalogUrl(value: string) {
   }
 }
 
-function normalizeAddress(value: string) {
+function normalizeAddress(value: string, currentUrl?: string) {
   const input = value.trim();
   if (!input) return undefined;
   if (/^https?:\/\//i.test(input)) return input;
   if (/^[\w.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(input)) return "https://" + input;
+  const siteSearch = getSiteSearchUrl(currentUrl, input);
+  if (siteSearch) return siteSearch;
   return "https://www.bing.com/search?q=" + encodeURIComponent(input + " 小说");
+}
+
+function getSiteSearchUrl(currentUrl: string | undefined, query: string) {
+  if (!currentUrl) return undefined;
+  try {
+    const parsed = new URL(currentUrl);
+    if (/(^|\.)bqg107\.xyz$/i.test(parsed.hostname)) {
+      return parsed.origin + "/#/search?q=" + encodeURIComponent(query);
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 const styles = StyleSheet.create({
@@ -1588,8 +1760,11 @@ const styles = StyleSheet.create({
   retryButton: { borderColor: "#6A8174", borderRadius: 16, borderWidth: 1, marginTop: 20, paddingHorizontal: 22, paddingVertical: 11 },
   retryText: { color: "#526C5E", fontSize: 13, fontWeight: "700" },
   loadingLine: { position: "absolute", left: 0, right: "35%", top: 0, height: 2, backgroundColor: "#557967" },
-  toolbar: { minHeight: Platform.OS === "android" ? 68 : 64, paddingHorizontal: 6, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FBF9F4", borderTopColor: "#E7E3DA", borderTopWidth: StyleSheet.hairlineWidth },
+  toolbar: { minHeight: Platform.OS === "android" ? 68 : 64, paddingHorizontal: 6, paddingVertical: 8, flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#FBF9F4", borderTopColor: "#E7E3DA", borderTopWidth: StyleSheet.hairlineWidth },
+  toolbarContent: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 4 },
+  toolbarContentTablet: { flex: 0, alignSelf: "center", gap: 10, width: 370 },
   navButtons: { flex: 1, minWidth: 0, flexDirection: "row", justifyContent: "space-between" },
+  navButtonsTablet: { flex: 0, gap: 10, justifyContent: "flex-start" },
   toolButton: { width: 34, height: 44, borderRadius: 15, backgroundColor: "#ECEFEA", alignItems: "center", justifyContent: "center" },
   toolActive: { backgroundColor: "#557565" },
   toolPressed: { transform: [{ scale: 0.92 }], backgroundColor: "#E1E7E2" },
@@ -1615,19 +1790,21 @@ const styles = StyleSheet.create({
   primaryButton: { flex: 1.2, height: 50, borderRadius: 18, backgroundColor: "#426B55", alignItems: "center", justifyContent: "center" },
   primaryText: { color: "#F8F4EA", fontSize: 15, fontWeight: "700" },
   readerMode:{position:"absolute",left:0,right:0,top:0,bottom:0,zIndex:20},
-  readerHeader:{minHeight:64,paddingHorizontal:10,flexDirection:"row",alignItems:"center",borderBottomWidth:1},
+  readerGuideTarget:{height:150,left:"32%",position:"absolute",right:"32%",top:"38%"},
+  readerHeader:{position:"absolute",left:10,right:10,top:8,zIndex:22,height:64,borderRadius:22,paddingHorizontal:10,flexDirection:"row",alignItems:"center",overflow:"hidden"},
   readerIcon:{width:44,height:44,alignItems:"center",justifyContent:"center"},
   readerHeaderText:{flex:1,alignItems:"center",paddingHorizontal:8},
   readerBook:{fontSize:14,fontWeight:"700"},
   readerChapter:{fontSize:10,marginTop:3},
-  readerContent:{paddingTop:24,paddingBottom:118},
-  readerPaged:{flex:1,overflow:"hidden",paddingTop:22},
-  readerPagedBody:{alignSelf:"center",flex:1},
+  readerContent:{paddingTop:32,paddingBottom:48},
+  readerPaged:{flex:1,overflow:"hidden"},
+  readerPagedBody:{alignSelf:"center",flex:1,paddingTop:30,paddingBottom:32},
   readerPagedCurrent:{flex:1},
   readerAdjacentPage:{...StyleSheet.absoluteFill,alignItems:"center"},
   readerPagedChapter:{fontFamily:"serif",fontSize:13,marginBottom:18},
   readerPageNumber:{fontSize:10,marginTop:"auto",paddingBottom:8,textAlign:"center",fontVariant:["tabular-nums"]},
   readerLeftTap:{bottom:0,left:0,position:"absolute",top:0,width:"32%"},
+  readerCenterTap:{bottom:0,left:"32%",position:"absolute",top:0,width:"36%"},
   readerRightTap:{bottom:0,position:"absolute",right:0,top:0,width:"32%"},
   readerEyebrow:{fontSize:10,fontWeight:"800",letterSpacing:2.2,marginBottom:15},
   readerTitle:{fontFamily:"serif",fontSize:26,fontWeight:"700",lineHeight:36},
@@ -1636,7 +1813,7 @@ const styles = StyleSheet.create({
   readerParagraph:{fontFamily:"serif",letterSpacing:.2,marginBottom:17},
   readerEnd:{flexDirection:"row",alignItems:"center",justifyContent:"center",gap:12,marginTop:30,marginBottom:12},
   readerEndLine:{width:52,height:1},
-  readerToolbar:{position:"absolute",left:10,right:10,bottom:10,minHeight:68,borderRadius:23,borderWidth:1,flexDirection:"row",alignItems:"center",paddingHorizontal:8,overflow:"hidden"},
+  readerToolbar:{position:"absolute",left:10,right:10,bottom:8,zIndex:22,minHeight:68,borderRadius:23,flexDirection:"row",alignItems:"center",paddingHorizontal:8,overflow:"hidden"},
   readerTool:{width:46,height:48,alignItems:"center",justifyContent:"center"},
   readerDisabled:{opacity:.24},
   readerCenterTool:{flex:1,height:48,flexDirection:"row",gap:7,alignItems:"center",justifyContent:"center"},
@@ -1646,7 +1823,7 @@ const styles = StyleSheet.create({
   readerLoadingText:{fontSize:13,marginTop:13},
   readerStopButton:{marginTop:16,minHeight:42,paddingHorizontal:20,borderRadius:15,borderWidth:1,alignItems:"center",justifyContent:"center"},
   readerStopText:{fontSize:13,fontWeight:"700"},
-  readerPanel:{position:"absolute",left:10,right:10,bottom:84,maxHeight:"58%",borderRadius:24,borderWidth:1,paddingBottom:12,zIndex:25,overflow:"hidden"},
+  readerPanel:{position:"absolute",left:10,right:10,bottom:84,maxHeight:"58%",borderRadius:24,paddingBottom:12,zIndex:25,overflow:"hidden"},
   readerPanelHeader:{minHeight:58,paddingHorizontal:16,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},
   readerPanelTitle:{fontSize:17,fontWeight:"800"},
   readerPanelClose:{width:34,height:34,borderRadius:17,alignItems:"center",justifyContent:"center"},

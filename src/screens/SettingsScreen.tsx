@@ -500,7 +500,7 @@ const exportAnnotations = async () => {
             last
             icon="information-circle-outline"
             title="关于墨读"
-            value="v1.5.9"
+            value="v1.5.12"
             onPress={() => setAboutVisible(true)}
           />
         </Section>
@@ -913,6 +913,7 @@ function LibraryModal({
   onDelete: (book: Book) => void;
 }) {
   const Alert = useAppAlert();
+  const { t } = useI18n();
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
@@ -922,7 +923,7 @@ function LibraryModal({
               <Text style={styles.modalTitle}>离线书籍</Text>
               <Text style={styles.modalSubtitle}>管理已导入的 EPUB 与 PDF</Text>
             </View>
-            <Pressable onPress={onClose} style={styles.closeButton}>
+            <Pressable accessibilityLabel={t("关闭离线书籍")} onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={20} color="#44443F" />
             </Pressable>
           </View>
@@ -942,6 +943,7 @@ function LibraryModal({
                   <Text style={styles.fileMeta}>{book.author}</Text>
                 </View>
                 <Pressable
+                  accessibilityLabel={`${t("删除")} ${book.title}`}
                   onPress={() => Alert.alert("删除书籍", "确定删除《" + book.title + "》吗？", [
                     { text: "取消", style: "cancel" },
                     { text: "删除", style: "destructive", onPress: () => onDelete(book) },
@@ -1045,7 +1047,7 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     >
         <View style={styles.aboutCard}>
           <View style={styles.aboutLogo}><Text style={styles.aboutLogoText}>墨</Text></View>
-          <Text style={styles.aboutTitle}>墨读 1.5.9</Text>
+          <Text style={styles.aboutTitle}>墨读 1.5.12</Text>
           <Text style={styles.aboutText}>
             愿每一次翻页，都像灯下展开的一封信。墨读替你收好本地与远方的书，也记住每一次停笔，让文字安静抵达，让片刻闲暇有处停泊。
           </Text>
@@ -1234,7 +1236,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     maxHeight: "76%",
-    minHeight: 360,
     padding: 20,
   },
   modalHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 16 },

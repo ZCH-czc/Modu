@@ -90,6 +90,7 @@ import {
   saveProgress,
 } from "./src/services/runtime";
 import { exportAppBackup, restoreAppBackup } from "./src/services/appBackup";
+import { resetSpotlightGuides } from "./src/services/spotlightGuides";
 import {
   exportAnnotationsMarkdown,
   loadAnnotations,
@@ -268,6 +269,8 @@ function AppContent() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [webReaderVisible, setWebReaderVisible] = useState(false);
   const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [spotlightGuidesEnabled, setSpotlightGuidesEnabled] = useState(false);
+  const [spotlightGuideResetToken, setSpotlightGuideResetToken] = useState(0);
   const [lanTransferVisible, setLanTransferVisible] = useState(false);
   const [webReaderInitialExtraction, setWebReaderInitialExtraction] = useState<WebPageExtraction>();
   const [webReaderInitialUrl, setWebReaderInitialUrl] = useState<string>();
@@ -280,10 +283,14 @@ function AppContent() {
   const [readingStats, setReadingStats] = useState<ReadingStats>(emptyReadingStats);
   const [readingGoalMinutes, setReadingGoalMinutes] = useState(30);
   const [currentBook, setCurrentBook] = useState<Book>();
+  const [readerLayerInteractive, setReaderLayerInteractive] = useState(false);
+  const [tabRasterized, setTabRasterized] = useState(false);
+  const [readerRasterized, setReaderRasterized] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress>();
   const importProgressValue = useRef(new Animated.Value(0)).current;
   const readerProgress = useRef(new Animated.Value(0)).current;
+  const tabRasterTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const preferencesRef = useRef<ReaderPreferences>(defaultPreferences);
   const preferencesSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pendingProgress = useRef<Record<string, ReadingProgress>>({});
@@ -325,11 +332,17 @@ function AppContent() {
 
   const changeTab = (nextTab: AppTab) => {
     if (nextTab === tab) return;
+    if (tabRasterTimerRef.current) clearTimeout(tabRasterTimerRef.current);
+    setTabRasterized(true);
     setTab(nextTab);
     tabProgress.value = withTiming(nextTab === "settings" ? 1 : 0, {
       duration: 280,
       easing: ReanimatedEasing.bezier(0.22, 1, 0.36, 1),
     });
+    tabRasterTimerRef.current = setTimeout(() => {
+      tabRasterTimerRef.current = undefined;
+      setTabRasterized(false);
+    }, 340);
   };
 
   const commitReadingSession = useEvent((restart = false) => {
@@ -401,11 +414,21 @@ function AppContent() {
 
   const finishOnboarding = useCallback(() => {
     setOnboardingVisible(false);
+    setSpotlightGuidesEnabled(true);
     void saveOnboardingComplete();
+  }, []);
+
+  const reopenOnboarding = useCallback(() => {
+    setSpotlightGuidesEnabled(false);
+    setSpotlightGuideResetToken((token) => token + 1);
+    setOnboardingVisible(true);
+    void resetSpotlightGuides();
   }, []);
 
   const closeReader = () => {
     if (!currentBook) return;
+    setReaderRasterized(true);
+    setReaderLayerInteractive(false);
     setVolumeKeyTurnsEnabled(false);
     readerProgress.stopAnimation();
     Animated.timing(readerProgress, {
@@ -426,6 +449,7 @@ function AppContent() {
       }
       requestAnimationFrame(() => {
         setCurrentBook(undefined);
+        setReaderRasterized(false);
         setOnlineSession(undefined);
         onlinePreloadRef.current = {
           generation: onlinePreloadRef.current.generation + 1,
@@ -494,6 +518,7 @@ function AppContent() {
         setProgress(readingProgress);
         setHiddenSampleIds(hiddenSamples);
         setOnboardingVisible(!onboardingComplete);
+        setSpotlightGuidesEnabled(onboardingComplete);
         setBookAppearances(savedBookAppearances);
         setBookmarks(savedBookmarks);
         setAnnotations(savedAnnotations);
@@ -685,6 +710,8 @@ function AppContent() {
       }
     }
     readerProgress.setValue(0);
+    setReaderRasterized(true);
+    setReaderLayerInteractive(true);
     setCurrentBook(preparedBook);
     requestAnimationFrame(() => {
       Animated.timing(readerProgress, {
@@ -692,7 +719,9 @@ function AppContent() {
         duration: 300,
         easing: Easing.bezier(0.22, 1, 0.36, 1),
         useNativeDriver: true,
-      }).start();
+      }).start(({ finished }) => {
+        if (finished) setReaderRasterized(false);
+      });
     });
   };
 
@@ -1701,12 +1730,14 @@ function AppContent() {
               <Reanimated.View
                 accessibilityElementsHidden={tab !== "shelf"}
                 importantForAccessibility={tab === "shelf" ? "auto" : "no-hide-descendants"}
-                renderToHardwareTextureAndroid
+                renderToHardwareTextureAndroid={tabRasterized}
                 pointerEvents={tab === "shelf" ? "auto" : "none"}
                 style={[styles.tabPage, shelfPageStyle]}
               >
                 <MemoHomeShelf
                   books={books}
+                  guideEnabled={spotlightGuidesEnabled && tab === "shelf" && !currentBook && !webReaderVisible && !sourceModalVisible}
+                  guideResetToken={spotlightGuideResetToken}
                   importedCount={importedBooks.length}
                   onBrowseWeb={openWebReader}
                   onImport={stableHandleImport}
@@ -1722,7 +1753,7 @@ function AppContent() {
               <Reanimated.View
                 accessibilityElementsHidden={tab !== "settings"}
                 importantForAccessibility={tab === "settings" ? "auto" : "no-hide-descendants"}
-                renderToHardwareTextureAndroid
+                renderToHardwareTextureAndroid={tabRasterized}
                 pointerEvents={tab === "settings" ? "auto" : "none"}
                 style={[styles.tabPage, settingsPageStyle]}
               >
@@ -1737,7 +1768,7 @@ function AppContent() {
                   onClearHistory={stableHandleClearHistory}
                   onDeleteBook={stableHandleDeleteBook}
                   onManageSources={openSourceModal}
-                  onOpenGuide={() => setOnboardingVisible(true)}
+                  onOpenGuide={reopenOnboarding}
                   onOpenLanTransfer={() => setLanTransferVisible(true)}
                   onReadingGoalChange={stableHandleReadingGoalChange}
                   onVolumeKeysChange={stableHandleVolumeKeys}
@@ -1826,7 +1857,8 @@ function AppContent() {
 
         {currentBook ? (
           <Animated.View
-            renderToHardwareTextureAndroid
+            pointerEvents={readerLayerInteractive ? "auto" : "none"}
+            renderToHardwareTextureAndroid={readerRasterized}
             style={[
               styles.readerLayer,
               {
@@ -1840,10 +1872,18 @@ function AppContent() {
             ]}
           >
             {currentBook.format === "pdf" ? (
-              <PdfReaderScreen book={currentBook} onBack={closeReader} preferences={preferences} />
+              <PdfReaderScreen
+                book={currentBook}
+                guideEnabled={spotlightGuidesEnabled}
+                guideResetToken={spotlightGuideResetToken}
+                onBack={closeReader}
+                preferences={preferences}
+              />
             ) : (
               <ReaderScreen
                 book={currentBook}
+                guideEnabled={spotlightGuidesEnabled}
+                guideResetToken={spotlightGuideResetToken}
                 annotations={annotations.filter((annotation) =>
                   annotation.bookId === currentBook.id &&
                   annotation.chapterIndex === getActiveChapterIndex(currentBook)
@@ -1905,6 +1945,8 @@ function AppContent() {
         <BookSourceBrowserBridge />
 
         <WebReaderModal
+          guideEnabled={spotlightGuidesEnabled}
+          guideResetToken={spotlightGuideResetToken}
           initialExtraction={webReaderInitialExtraction}
           initialUrl={webReaderInitialUrl}
           readerFont={preferences.fontFamily}

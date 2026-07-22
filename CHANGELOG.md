@@ -6,6 +6,26 @@ The project follows [Semantic Versioning](https://semver.org/). Changes that hav
 
 ## [Unreleased]
 
+## [1.5.12] - 2026-07-22
+
+### Added
+- Add contextual spotlight tours that point to real controls across the library, Web Finder, Web Reader, local EPUB/TXT reader, and PDF reader.
+- Persist guide completion locally and let users replay the complete onboarding flow from Settings.
+- Add complete English copy and accessibility labels for the new guided experience.
+
+### Changed
+- Adapt guide highlights and instruction cards to phone and tablet safe areas, including display cutouts and Android gesture navigation.
+- Use bounded motion and scale transitions for guide steps without continuous animations or full-screen fade flashes.
+## [1.5.11] - 2026-07-21
+
+### Fixed
+- Align the tablet cover editor header, preview content, color fields, and actions on one content axis, and render deterministic 10-column tablet and 5-column phone color palettes.
+
+## [1.5.10] - 2026-07-21
+
+### Fixed
+- Center the Web Finder bottom toolbar as a compact control group on tablets while preserving the responsive phone layout.
+
 ## [1.5.9] - 2026-07-21
 
 ### Added

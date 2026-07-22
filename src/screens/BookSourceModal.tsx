@@ -23,6 +23,7 @@ import Animated, {
   FadeOut,
   LinearTransition,
   SlideInDown,
+  SlideOutDown,
   cancelAnimation,
   interpolate,
   interpolateColor,
@@ -435,6 +436,7 @@ export function BookSourceModal({
                           value={keyword}
                         />
                         <ActionButton
+                          accessibilityLabel={t("搜索书源")}
                           busy={busy === "search"}
                           disabled={!keyword.trim() || Boolean(busy)}
                           icon="search"
@@ -537,6 +539,7 @@ export function BookSourceModal({
               >
                 <Animated.View
                   entering={SlideInDown.duration(230)}
+                  exiting={SlideOutDown.duration(180)}
                   style={styles.managerSheet}
                 >
                   <View style={styles.managerHeader}>
@@ -821,6 +824,7 @@ function ResultCard({
 }
 
 function ActionButton({
+  accessibilityLabel,
   busy,
   disabled,
   icon,
@@ -828,6 +832,7 @@ function ActionButton({
   onPress,
   style,
 }: {
+  accessibilityLabel?: string;
   busy: boolean;
   disabled: boolean;
   icon: keyof typeof Ionicons.glyphMap;
@@ -837,6 +842,7 @@ function ActionButton({
 }) {
   return (
     <MotionPressable
+      accessibilityLabel={accessibilityLabel || label}
       disabled={disabled}
       onPress={onPress}
       style={[style, disabled ? styles.disabled : {}]}
