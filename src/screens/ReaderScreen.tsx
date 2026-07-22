@@ -49,8 +49,6 @@ import type {
 } from "../types";
 import { getReaderFontFamily } from "../utils/readerFonts";
 import { IOSPopupModal } from "../components/IOSPopupModal";
-import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
-import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import {
   createMeasuredReaderPaginationLayout,
   type ReaderPaginationLayout,
@@ -81,8 +79,6 @@ type ReaderScreenProps = {
   onOpenOriginal?: (url?: string) => void;
   downloadProgress?: { completed: number; total: number };
   onPaginationMeasured?: (layout: ReaderPaginationLayout) => void;
-  guideEnabled?: boolean;
-  guideResetToken?: number;
 };
 
 type ChapterEntry = {
@@ -300,8 +296,6 @@ export function ReaderScreen({
   onOpenOriginal,
   downloadProgress,
   onPaginationMeasured,
-  guideEnabled = false,
-  guideResetToken = 0,
 }: ReaderScreenProps) {
   const { resolvedLanguage } = useI18n();
   const [pageIndex, setPageIndex] = useState(() =>
@@ -341,19 +335,6 @@ export function ReaderScreen({
   const backGuideRef = useRef<View>(null);
   const bookmarkGuideRef = useRef<View>(null);
   const chapterGuideRef = useRef<View>(null);
-  const localReaderGuide = useSpotlightGuide("local-reader-v1", guideEnabled, guideResetToken);
-  const localReaderGuideSteps = useMemo<SpotlightStep[]>(() => [
-    { key: "gestures", target: gestureGuideRef, icon: "hand-left-outline", title: "用手势翻动书页", description: "向左或向右滑动切换页面；也可以点击屏幕两侧翻页。轻点中央会显示或隐藏阅读菜单。" },
-    { key: "chapters", target: chapterGuideRef, icon: "list-outline", title: "从这里打开章节", description: "章节目录支持直接跳转；本地 EPUB 与 TXT 还可以在整本书中搜索一句话。", placement: "below" },
-    { key: "bookmark", target: bookmarkGuideRef, icon: "bookmark-outline", title: "留下书签与批注", description: "点这里收藏当前页。长按正文可以划线，并写下只保存在本机的批注。", placement: "below" },
-    { key: "back", target: backGuideRef, icon: "arrow-back", title: "回到书架", description: "阅读进度会自动保存。返回时会沿着进入的方向回到书架。", placement: "below" },
-  ], []);
-
-  useEffect(() => {
-    if (!localReaderGuide.visible) return;
-    setChapterVisible(false);
-    setControlsVisible(true);
-  }, [localReaderGuide.visible]);
   const pageCacheRef = useRef(new Map<number, string[]>());
   const pageBookKey = `${book.id}:${book.localChapterIndex ?? book.onlineChapterIndex ?? "all"}:${book.pages.length}:${book.paginationVersion ?? 0}`;
   const paragraphLayoutPageKey = `${pageBookKey}:${pageIndex}`;
@@ -2073,7 +2054,6 @@ let cancelled = false;
             </View>
           </KeyboardAvoidingView>
         </IOSPopupModal>
-        <SpotlightTour onComplete={localReaderGuide.complete} steps={localReaderGuideSteps} visible={localReaderGuide.visible} />
       </View>
     </SafeAreaView>
   );

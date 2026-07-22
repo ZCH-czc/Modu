@@ -20,8 +20,6 @@ import { Text, TextInput, useI18n } from "../i18n";
 import type { DimensionValue } from "react-native";
 
 import { IOSPopupModal } from "../components/IOSPopupModal";
-import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
-import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
 import type { Book } from "../types";
 import {
   defaultLibraryViewPreferences,
@@ -42,8 +40,6 @@ type HomeShelfProps = {
   onRename: (book: Book, title: string) => Promise<void>;
   onPickCoverImage: (book: Book) => Promise<boolean>;
   onSetCoverColors: (book: Book, colors: readonly [string, string]) => Promise<void>;
-  guideEnabled?: boolean;
-  guideResetToken?: number;
 };
 
 type ShelfListItem =
@@ -78,8 +74,6 @@ export function HomeShelf({
   onRename,
   onPickCoverImage,
   onSetCoverColors,
-  guideEnabled = false,
-  guideResetToken = 0,
 }: HomeShelfProps) {
   const { resolvedLanguage } = useI18n();
   const { width } = useWindowDimensions();
@@ -100,12 +94,6 @@ export function HomeShelf({
   const webButtonRef = useRef<View>(null);
   const sourceButtonRef = useRef<View>(null);
   const importButtonRef = useRef<View>(null);
-  const shelfGuide = useSpotlightGuide("shelf-actions-v1", guideEnabled, guideResetToken);
-  const shelfGuideSteps = useMemo<SpotlightStep[]>(() => [
-    { key: "web", target: webButtonRef, icon: "compass-outline", title: "网页寻书", description: "在内置网页中搜索或打开小说网站。找到正文后，可以进入阅读模式，也可以收藏到书架。", placement: "below" },
-    { key: "sources", target: sourceButtonRef, icon: "globe-outline", title: "在线书源", description: "导入书源规则后，可以直接搜索书名、查看目录，并按章节开始阅读。", placement: "below" },
-    { key: "import", target: importButtonRef, icon: "add", title: "导入本地书", description: "从设备中选择 EPUB、TXT 或 PDF。解析过程会显示进度，完成后会出现在书架。", placement: "below" },
-  ], []);
 
 
   useEffect(() => {
@@ -660,7 +648,6 @@ export function HomeShelf({
           </View>
         </ScrollView>
       </IOSPopupModal>
-      <SpotlightTour onComplete={shelfGuide.complete} steps={shelfGuideSteps} visible={shelfGuide.visible} />
     </View>
   );
 }

@@ -13,6 +13,7 @@ import {
   AppState,
   BackHandler,
   Easing,
+  InteractionManager,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -30,7 +31,13 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { AppDialogProvider, useAppAlert } from "./src/components/AppDialog";
 import { BrandLaunchScreen } from "./src/components/BrandLaunchScreen";
+import { ChangelogModal } from "./src/components/ChangelogModal";
 import { OnboardingModal } from "./src/components/OnboardingModal";
+import {
+  PerformanceMonitorProvider,
+  PerformanceRegion,
+  usePerformanceMonitor,
+} from "./src/components/PerformanceMonitor";
 import { getSampleBooks } from "./src/data/books";
 import { BookSourceBrowserBridge } from "./src/components/BookSourceBrowserBridge";
 import { BookSourceModal } from "./src/screens/BookSourceModal";
@@ -90,7 +97,6 @@ import {
   saveProgress,
 } from "./src/services/runtime";
 import { exportAppBackup, restoreAppBackup } from "./src/services/appBackup";
-import { resetSpotlightGuides } from "./src/services/spotlightGuides";
 import {
   exportAnnotationsMarkdown,
   loadAnnotations,
@@ -105,6 +111,11 @@ import {
   type ReadingStats,
 } from "./src/services/readingStats";
 import { loadReadingGoal, saveReadingGoal } from "./src/services/readingGoal";
+import {
+  loadPendingChangelog,
+  markChangelogSeen,
+  type PendingChangelog,
+} from "./src/services/changelog";
 import {
   createWebCaptureBook,
   createWebCaptureExtraction,
@@ -245,7 +256,9 @@ export default function App() {
     <>
       <I18nProvider>
         <AppDialogProvider>
-          <AppContent />
+          <PerformanceMonitorProvider>
+            <AppContent launchComplete={!launchVisible} />
+          </PerformanceMonitorProvider>
         </AppDialogProvider>
       </I18nProvider>
       {launchVisible ? <BrandLaunchScreen onFinished={finishLaunch} /> : null}
@@ -253,8 +266,9 @@ export default function App() {
   );
 }
 
-function AppContent() {
+function AppContent({ launchComplete }: { launchComplete: boolean }) {
   const Alert = useAppAlert();
+  const { setActiveScreen: setPerformanceScreen } = usePerformanceMonitor();
   const { resolvedLanguage } = useI18n();
   const sampleBooks = useMemo(() => getSampleBooks(resolvedLanguage), [resolvedLanguage]);
   const [ready, setReady] = useState(false);
@@ -269,8 +283,9 @@ function AppContent() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [webReaderVisible, setWebReaderVisible] = useState(false);
   const [onboardingVisible, setOnboardingVisible] = useState(false);
-  const [spotlightGuidesEnabled, setSpotlightGuidesEnabled] = useState(false);
-  const [spotlightGuideResetToken, setSpotlightGuideResetToken] = useState(0);
+  const [onboardingPending, setOnboardingPending] = useState(false);
+  const [changelogVisible, setChangelogVisible] = useState(false);
+  const [pendingChangelog, setPendingChangelog] = useState<PendingChangelog>();
   const [lanTransferVisible, setLanTransferVisible] = useState(false);
   const [webReaderInitialExtraction, setWebReaderInitialExtraction] = useState<WebPageExtraction>();
   const [webReaderInitialUrl, setWebReaderInitialUrl] = useState<string>();
@@ -414,15 +429,19 @@ function AppContent() {
 
   const finishOnboarding = useCallback(() => {
     setOnboardingVisible(false);
-    setSpotlightGuidesEnabled(true);
+    setOnboardingPending(false);
     void saveOnboardingComplete();
   }, []);
 
+  const finishChangelog = useCallback(() => {
+    if (pendingChangelog) void markChangelogSeen(pendingChangelog.version);
+    setChangelogVisible(false);
+    setPendingChangelog(undefined);
+  }, [pendingChangelog]);
+
   const reopenOnboarding = useCallback(() => {
-    setSpotlightGuidesEnabled(false);
-    setSpotlightGuideResetToken((token) => token + 1);
+    setOnboardingPending(false);
     setOnboardingVisible(true);
-    void resetSpotlightGuides();
   }, []);
 
   const closeReader = () => {
@@ -473,6 +492,10 @@ function AppContent() {
         finishOnboarding();
         return true;
       }
+      if (changelogVisible) {
+        finishChangelog();
+        return true;
+      }
       if (webReaderVisible) {
         closeWebReader();
         return true;
@@ -492,7 +515,7 @@ function AppContent() {
       return false;
     });
     return () => subscription.remove();
-  }, [currentBook, finishOnboarding, lanTransferVisible, onboardingVisible, sourceModalVisible, tab, webReaderVisible]);
+  }, [changelogVisible, currentBook, finishChangelog, finishOnboarding, lanTransferVisible, onboardingVisible, sourceModalVisible, tab, webReaderVisible]);
 
   useEffect(() => {
     Promise.all([
@@ -503,12 +526,13 @@ function AppContent() {
       loadProgress(),
       loadHiddenSampleBooks(),
       loadOnboardingComplete(),
+      loadPendingChangelog(),
       loadBookAppearances(),
       loadBookmarks(),
       loadAnnotations(),
       loadReadingStats(),
     ])
-      .then(([savedPreferences, localBooks, savedOnlineBooks, savedSources, readingProgress, hiddenSamples, onboardingComplete, savedBookAppearances, savedBookmarks, savedAnnotations, savedReadingStats]) => {
+      .then(([savedPreferences, localBooks, savedOnlineBooks, savedSources, readingProgress, hiddenSamples, onboardingComplete, changelog, savedBookAppearances, savedBookmarks, savedAnnotations, savedReadingStats]) => {
         preferencesRef.current = savedPreferences;
         setPreferences(savedPreferences);
         setImportedBooks(localBooks);
@@ -517,8 +541,8 @@ function AppContent() {
         setSources(savedSources);
         setProgress(readingProgress);
         setHiddenSampleIds(hiddenSamples);
-        setOnboardingVisible(!onboardingComplete);
-        setSpotlightGuidesEnabled(onboardingComplete);
+        setOnboardingPending(!onboardingComplete);
+        setPendingChangelog(changelog);
         setBookAppearances(savedBookAppearances);
         setBookmarks(savedBookmarks);
         setAnnotations(savedAnnotations);
@@ -533,6 +557,44 @@ function AppContent() {
       })
       .finally(() => setReady(true));
   }, []);
+  useEffect(() => {
+    if (!ready || !launchComplete || !onboardingPending || onboardingVisible) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        setOnboardingVisible(true);
+      }, 420);
+    });
+    return () => {
+      cancelled = true;
+      task.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, [launchComplete, onboardingPending, onboardingVisible, ready]);
+  useEffect(() => {
+    if (
+      !ready ||
+      !launchComplete ||
+      !pendingChangelog ||
+      changelogVisible ||
+      onboardingPending ||
+      onboardingVisible
+    ) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const task = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => {
+        if (!cancelled) setChangelogVisible(true);
+      }, 280);
+    });
+    return () => {
+      cancelled = true;
+      task.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, [changelogVisible, launchComplete, onboardingPending, onboardingVisible, pendingChangelog, ready]);
   useEffect(() => {
     void loadReadingGoal().then(setReadingGoalMinutes);
   }, []);
@@ -1677,6 +1739,36 @@ function AppContent() {
     setWebReaderVisible(true);
   }, []);
 
+  useEffect(() => {
+    const activeScreen = onboardingVisible
+      ? "新手引导"
+      : changelogVisible
+        ? "更新日志"
+        : lanTransferVisible
+          ? "局域网传书"
+          : sourceModalVisible
+            ? "在线书源"
+            : webReaderVisible
+              ? "网页寻书与网页阅读器"
+              : currentBook
+                ? currentBook.format === "pdf"
+                  ? "PDF 阅读器"
+                  : "本地阅读器 · " + currentBook.format.toUpperCase()
+                : tab === "settings"
+                  ? "设置"
+                  : "书架";
+    setPerformanceScreen(activeScreen);
+  }, [
+    changelogVisible,
+    currentBook,
+    lanTransferVisible,
+    onboardingVisible,
+    setPerformanceScreen,
+    sourceModalVisible,
+    tab,
+    webReaderVisible,
+  ]);
+
   const openCapturedWebPage = useEvent((url?: string) => {
     const extraction = currentBook ? createWebCaptureExtraction(currentBook) : undefined;
     const target = url || extraction?.tocUrl || extraction?.url || currentBook?.sourceUrl;
@@ -1734,20 +1826,20 @@ function AppContent() {
                 pointerEvents={tab === "shelf" ? "auto" : "none"}
                 style={[styles.tabPage, shelfPageStyle]}
               >
-                <MemoHomeShelf
-                  books={books}
-                  guideEnabled={spotlightGuidesEnabled && tab === "shelf" && !currentBook && !webReaderVisible && !sourceModalVisible}
-                  guideResetToken={spotlightGuideResetToken}
-                  importedCount={importedBooks.length}
-                  onBrowseWeb={openWebReader}
-                  onImport={stableHandleImport}
-                  onOnline={openSourceModal}
-                  onOpen={stableHandleOpenBook}
-                  onRemove={stableHandleRemoveShelfBook}
-                  onPickCoverImage={stableHandlePickBookCoverImage}
-                  onRename={stableHandleRenameShelfBook}
-                  onSetCoverColors={stableHandleSetBookCoverColors}
-                />
+                <PerformanceRegion active={tab === "shelf"} id="shelf-content" label="书架内容" style={styles.performanceFill}>
+                  <MemoHomeShelf
+                    books={books}
+                    importedCount={importedBooks.length}
+                    onBrowseWeb={openWebReader}
+                    onImport={stableHandleImport}
+                    onOnline={openSourceModal}
+                    onOpen={stableHandleOpenBook}
+                    onRemove={stableHandleRemoveShelfBook}
+                    onPickCoverImage={stableHandlePickBookCoverImage}
+                    onRename={stableHandleRenameShelfBook}
+                    onSetCoverColors={stableHandleSetBookCoverColors}
+                  />
+                </PerformanceRegion>
               </Reanimated.View>
 
               <Reanimated.View
@@ -1757,30 +1849,35 @@ function AppContent() {
                 pointerEvents={tab === "settings" ? "auto" : "none"}
                 style={[styles.tabPage, settingsPageStyle]}
               >
-                <MemoSettingsScreen
-                  books={books}
-                  importedBooks={importedBooks}
-                  onChange={stableUpdatePreferences}
-                  onClearCache={stableHandleClearAppCache}
-                  onExportAnnotations={handleExportAnnotations}
-                  onExportBackup={handleExportBackup}
-                  onRestoreBackup={handleRestoreBackup}
-                  onClearHistory={stableHandleClearHistory}
-                  onDeleteBook={stableHandleDeleteBook}
-                  onManageSources={openSourceModal}
-                  onOpenGuide={reopenOnboarding}
-                  onOpenLanTransfer={() => setLanTransferVisible(true)}
-                  onReadingGoalChange={stableHandleReadingGoalChange}
-                  onVolumeKeysChange={stableHandleVolumeKeys}
-                  preferences={preferences}
-                  readingGoalMinutes={readingGoalMinutes}
-                  readingStats={readingStats}
-                  sourceCount={sources.length}
-                />
+                <PerformanceRegion active={tab === "settings"} id="settings-content" label="设置内容" style={styles.performanceFill}>
+                  <MemoSettingsScreen
+                    books={books}
+                    importedBooks={importedBooks}
+                    onChange={stableUpdatePreferences}
+                    onClearCache={stableHandleClearAppCache}
+                    onExportAnnotations={handleExportAnnotations}
+                    onExportBackup={handleExportBackup}
+                    onRestoreBackup={handleRestoreBackup}
+                    onClearHistory={stableHandleClearHistory}
+                    onDeleteBook={stableHandleDeleteBook}
+                    onManageSources={openSourceModal}
+                    onOpenGuide={reopenOnboarding}
+                    onOpenLanTransfer={() => setLanTransferVisible(true)}
+                    onReadingGoalChange={stableHandleReadingGoalChange}
+                    onVolumeKeysChange={stableHandleVolumeKeys}
+                    preferences={preferences}
+                    readingGoalMinutes={readingGoalMinutes}
+                    readingStats={readingStats}
+                    sourceCount={sources.length}
+                  />
+                </PerformanceRegion>
               </Reanimated.View>
             </View>
 
-            <View
+            <PerformanceRegion
+              active={!currentBook && !webReaderVisible}
+              id="bottom-navigation"
+              label="底部导航栏"
               style={[
                 styles.nav,
                 {
@@ -1804,7 +1901,7 @@ function AppContent() {
               </Reanimated.View>
               <NavItem active={tab === "shelf"} icon="library-outline" label="书架" onPress={() => changeTab("shelf")} />
               <NavItem active={tab === "settings"} icon="options-outline" label="设置" onPress={() => changeTab("settings")} />
-            </View>
+            </PerformanceRegion>
 
             {importing ? (
               <View style={styles.importingOverlay}>
@@ -1871,19 +1968,16 @@ function AppContent() {
               },
             ]}
           >
+            <PerformanceRegion id="reader-content" label="阅读器内容" style={styles.performanceFill}>
             {currentBook.format === "pdf" ? (
               <PdfReaderScreen
                 book={currentBook}
-                guideEnabled={spotlightGuidesEnabled}
-                guideResetToken={spotlightGuideResetToken}
                 onBack={closeReader}
                 preferences={preferences}
               />
             ) : (
               <ReaderScreen
                 book={currentBook}
-                guideEnabled={spotlightGuidesEnabled}
-                guideResetToken={spotlightGuideResetToken}
                 annotations={annotations.filter((annotation) =>
                   annotation.bookId === currentBook.id &&
                   annotation.chapterIndex === getActiveChapterIndex(currentBook)
@@ -1929,6 +2023,7 @@ function AppContent() {
                 preferences={preferences}
               />
             )}
+            </PerformanceRegion>
           </Animated.View>
         ) : null}
 
@@ -1945,8 +2040,6 @@ function AppContent() {
         <BookSourceBrowserBridge />
 
         <WebReaderModal
-          guideEnabled={spotlightGuidesEnabled}
-          guideResetToken={spotlightGuideResetToken}
           initialExtraction={webReaderInitialExtraction}
           initialUrl={webReaderInitialUrl}
           readerFont={preferences.fontFamily}
@@ -1967,6 +2060,11 @@ function AppContent() {
           visible={lanTransferVisible}
         />
         <OnboardingModal onComplete={finishOnboarding} visible={onboardingVisible} />
+        <ChangelogModal
+          changelog={pendingChangelog}
+          onClose={finishChangelog}
+          visible={changelogVisible}
+        />
 
         {onlineLoading && !sourceModalVisible ? (
           <View style={styles.onlineLoading}>
@@ -2018,6 +2116,7 @@ const styles = StyleSheet.create({
   appHidden: { display: "none" },
   content: { flex: 1, overflow: "hidden" },
   tabPage: { backgroundColor: "#F4F1EA", bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  performanceFill: { flex: 1 },
   loading: { alignItems: "center", backgroundColor: "#F4F1EA", flex: 1, gap: 13, justifyContent: "center" },
   loadingText: { color: "#778078", fontSize: 13 },
   nav: {

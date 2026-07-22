@@ -37,8 +37,7 @@ import {
 } from "react-native-webview";
 
 import { useAppAlert } from "../components/AppDialog";
-import { SpotlightTour, type SpotlightStep } from "../components/SpotlightTour";
-import { useSpotlightGuide } from "../hooks/useSpotlightGuide";
+import { PerformanceRegion } from "../components/PerformanceMonitor";
 import type { ReaderFont, WebChapterExtraction, WebChapterLink, WebPageExtraction, WebReaderFlow } from "../types";
 import { getReaderFontFamily, readerFontOptions } from "../utils/readerFonts";
 import { mergeWebChapterLinks } from "../services/webCapture";
@@ -79,8 +78,6 @@ type Props = {
   webReaderFlow: WebReaderFlow;
   volumeKeysEnabled: boolean;
   onWebReaderFlowChange: (flow: WebReaderFlow) => void;
-  guideEnabled?: boolean;
-  guideResetToken?: number;
 };
 
 type ReaderModeTheme = "paper" | "white" | "green" | "night";
@@ -200,7 +197,7 @@ const CATALOG_EXTRACTION_SCRIPT = String.raw`
 })();
 true;
 `;
-export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSource, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange, volumeKeysEnabled, guideEnabled = false, guideResetToken = 0 }: Props) {
+export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSource, initialExtraction, initialUrl, readerFont, onReaderFontChange, webReaderFlow, onWebReaderFlowChange, volumeKeysEnabled }: Props) {
   const Alert = useAppAlert();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
@@ -256,23 +253,6 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
   const readerChapterGuideRef=useRef<View>(null);
   const readerAppearanceGuideRef=useRef<View>(null);
   const readerSaveGuideRef=useRef<View>(null);
-  const browserGuide=useSpotlightGuide("web-browser-v1",guideEnabled&&visible&&!readerMode,guideResetToken);
-  const webModeGuide=useSpotlightGuide("web-reading-mode-v1",guideEnabled&&visible&&readerMode&&Boolean(preview),guideResetToken);
-  const browserGuideSteps=useMemo<SpotlightStep[]>(()=>[
-    {key:"address",target:addressGuideRef,icon:"search-outline",title:"从这里寻找故事",description:"输入网址、书名或作者。访问过的网址会出现在历史联想中，常用网站也可以收藏。",placement:"below"},
-    {key:"navigation",target:browserNavGuideRef,icon:"navigate-outline",title:"像浏览器一样使用",description:"这里依次提供首页、前进后退、历史、网页收藏和目录标记。目录标记能帮助墨读识别完整章节。",placement:"above"},
-    {key:"actions",target:browserActionsGuideRef,icon:"book-outline",title:"收藏与阅读分开",description:"书签图标会把当前网页内容加入书架；书本图标只进入沉浸式阅读，不会自动收藏。",placement:"above"},
-  ],[]);
-  const webModeGuideSteps=useMemo<SpotlightStep[]>(()=>[
-    {key:"gestures",target:readerGestureGuideRef,icon:"hand-left-outline",title:"网页也能左右翻页",description:"左右滑动或点击两侧翻页，轻点中央显示菜单。也可以在阅读外观中切换为上下滚动。"},
-    {key:"chapters",target:readerChapterGuideRef,icon:"list-outline",title:"网页章节目录",description:"打开已识别的目录并直接跳转。未缓存的章节会在选择后按需整理。",placement:"above"},
-    {key:"appearance",target:readerAppearanceGuideRef,icon:"text-outline",title:"调整网页阅读外观",description:"切换主题、字体、字号和阅读方向，让网页正文与本地阅读体验保持一致。",placement:"above"},
-    {key:"save",target:readerSaveGuideRef,icon:"bookmark-outline",title:"需要时再加入书架",description:"阅读模式不会自动收藏。点这里保存后，书架会记住原网页、章节和阅读位置。",placement:"above"},
-    {key:"exit",target:readerExitGuideRef,icon:"chevron-down",title:"退出阅读模式",description:"点这里回到原网页；关闭网页寻书则会沿进入方向返回书架。",placement:"below"},
-  ],[]);
-
-  useEffect(()=>{if(browserGuide.visible)setBrowserPanel(undefined);},[browserGuide.visible]);
-  useEffect(()=>{if(!webModeGuide.visible)return;setReaderPanel(undefined);setReaderControlsVisible(true);},[webModeGuide.visible]);
   const {width:screenWidth,height:screenHeight}=useWindowDimensions();
   const isTabletToolbar=screenWidth>=600;
   const readerPalette=READER_MODE_THEMES[readerTheme];
@@ -973,6 +953,7 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
       exiting={SlideOutRight.duration(250)}
       style={styles.overlay}
     >
+      <PerformanceRegion id="web-reader-content" label="网页寻书与网页阅读器内容" style={styles.performanceFill}>
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <View style={styles.brand}>
@@ -1558,9 +1539,8 @@ export function WebReaderModal({ visible, onAdd, onClose, onRead, onResolveSourc
             ) : null}
           </Animated.View>
         ) : null}
-        <SpotlightTour onComplete={browserGuide.complete} steps={browserGuideSteps} visible={browserGuide.visible}/>
-        <SpotlightTour onComplete={webModeGuide.complete} steps={webModeGuideSteps} visible={webModeGuide.visible}/>
       </SafeAreaView>
+      </PerformanceRegion>
     </Animated.View>
   );
 }
@@ -1698,6 +1678,7 @@ function getSiteSearchUrl(currentUrl: string | undefined, query: string) {
 const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFill, backgroundColor: "#F7F4ED", elevation: 100, zIndex: 100 },
   safe: { flex: 1, backgroundColor: "#F7F4ED" },
+  performanceFill: { flex: 1 },
   header: { minHeight: 72, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   brand: { flexDirection: "row", alignItems: "center", gap: 10 },
   brandIcon: { width: 40, height: 40, borderRadius: 15, backgroundColor: "#E6EEE8", alignItems: "center", justifyContent: "center" },

@@ -27,6 +27,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAppAlert } from "../components/AppDialog";
 import { IOSPopupModal } from "../components/IOSPopupModal";
+import { usePerformanceMonitor } from "../components/PerformanceMonitor";
 import { ReadingInsightsModal } from "../components/ReadingInsightsModal";
 import {
   checkForAppUpdate,
@@ -76,6 +77,7 @@ const themes: Array<{ key: ReaderTheme; label: string; color: string }> = [
 
 export function SettingsScreen(props: Props) {
   const Alert = useAppAlert();
+  const performanceMonitor = usePerformanceMonitor();
   const { language, setLanguage } = useI18n();
   const [libraryVisible, setLibraryVisible] = useState(false);
   const [aboutVisible, setAboutVisible] = useState(false);
@@ -483,6 +485,16 @@ const exportAnnotations = async () => {
             title="清除阅读记录"
             value="重置位置"
             onPress={clearHistory}
+            last
+          />
+        </Section>
+
+        <Section title="诊断与帮助">
+          <ActionRow
+            icon="pulse-outline"
+            title="性能检测"
+            value={performanceMonitor.isRecording ? "录制中" : "录制与导出"}
+            onPress={performanceMonitor.openPanel}
           />
           <ActionRow
             icon="compass-outline"
